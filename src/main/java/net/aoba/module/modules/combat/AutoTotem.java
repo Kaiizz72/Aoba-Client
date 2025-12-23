@@ -8,7 +8,6 @@ import net.aoba.event.listeners.TickListener;
 import net.aoba.module.Category;
 import net.aoba.module.Module;
 import net.aoba.settings.types.BooleanSetting;
-import net.aoba.settings.types.FloatSetting;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.InventoryScreen;
 import net.minecraft.entity.player.PlayerInventory;
@@ -18,15 +17,6 @@ import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.util.Hand;
 
 public class AutoTotem extends Module implements ReceivePacketListener, TickListener {
-
-    private final FloatSetting delaySetting = FloatSetting.builder()
-            .id("autototem_delay")
-            .displayName("Delay (ms)")
-            .defaultValue(150f)
-            .minValue(50f)
-            .maxValue(300f)
-            .step(10f)
-            .build();
 
     private final BooleanSetting autoEsc = BooleanSetting.builder()
             .id("autototem_autoesc")
@@ -39,11 +29,13 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     private int stage = 0; // stage machine
     private boolean inventoryOpen = false;
 
+    // Delay cố định human-like (ms)
+    private final long delay = 150;
+
     public AutoTotem() {
         super("AutoTotem");
         setCategory(Category.of("Combat"));
-        setDescription("Totem pop → swap offhand → open E → refill slot 8 → close E");
-        addSetting(delaySetting);
+        setDescription("Totem pop → di chuột vô totem → nhấn F → refill slot 8 → close inventory");
         addSetting(autoEsc);
     }
 
@@ -75,12 +67,11 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null || mc.world == null || packet.getEntity(mc.world) != mc.player) return;
 
-        long delay = Math.round(delaySetting.getValue());
         if (System.currentTimeMillis() - lastAction < delay) return;
 
-        // Stage 1: swap slot 8 -> offhand
-        swapHotbarWithOffhand(8);
-        mc.player.swingHand(Hand.MAIN_HAND); // nhấn F human-like
+        // Stage 1: mở inventory để di chuột vô totem
+        mc.setScreen(new InventoryScreen(mc.player));
+        inventoryOpen = true;
         stage = 2;
         lastAction = System.currentTimeMillis();
     }
@@ -97,31 +88,31 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null || mc.world == null) return;
 
-        long delay = Math.round(delaySetting.getValue());
         if (System.currentTimeMillis() - lastAction < delay) return;
 
         PlayerInventory inv = mc.player.getInventory();
 
         switch (stage) {
-            case 2: // Mở Inventory GUI human-like
-                if (!inventoryOpen) {
-                    mc.setScreen(new InventoryScreen(mc.player)); // mở Inventory GUI
-                    inventoryOpen = true;
-                    lastAction = System.currentTimeMillis();
+            case 2: // Di chuột vào slot chứa totem → nhấn F
+                int totemSlot = findTotemInInventory();
+                if (totemSlot != -1) {
+                    mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, totemSlot, 0, SlotActionType.PICKUP, mc.player);
+                    mc.player.swingHand(Hand.MAIN_HAND); // nhấn F human-like
                 }
                 stage = 3;
+                lastAction = System.currentTimeMillis();
                 break;
 
             case 3: // Refill slot 8 nếu trống
                 if (inv.getStack(8).getItem() != Items.TOTEM_OF_UNDYING) {
-                    int totemSlot = findTotemInInventory();
+                    totemSlot = findTotemInInventory();
                     if (totemSlot != -1) moveItem(totemSlot, 8);
                 }
                 stage = 4;
                 lastAction = System.currentTimeMillis();
                 break;
 
-            case 4: // Đóng Inventory (ESC) nếu bật
+            case 4: // Thả inventory và ESC nếu bật
                 if (inventoryOpen) {
                     if (autoEsc.getValue()) mc.setScreen(null);
                     inventoryOpen = false;
@@ -149,10 +140,5 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         int syncId = mc.player.currentScreenHandler.syncId;
         mc.interactionManager.clickSlot(syncId, from, 0, SlotActionType.PICKUP, mc.player);
         mc.interactionManager.clickSlot(syncId, to, 0, SlotActionType.PICKUP, mc.player);
-    }
-
-    private void swapHotbarWithOffhand(int slot) {
-        MinecraftClient mc = MinecraftClient.getInstance();
-        mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, 45, slot, SlotActionType.SWAP, mc.player);
     }
 }
