@@ -1,70 +1,61 @@
-/*
- * Aoba Hacked Client
- * AutoTotem Improved
- */
-
 package net.aoba.module.modules.combat;
 
 import net.aoba.Aoba;
-import net.aoba.event.events.PlayerHealthEvent;
-import net.aoba.event.listeners.PlayerHealthListener;
+import net.aoba.event.events.ReceivePacketEvent;
+import net.aoba.event.listeners.ReceivePacketListener;
 import net.aoba.module.Category;
 import net.aoba.module.Module;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.network.packet.s2c.play.EntityStatusS2CPacket;
 import net.minecraft.screen.slot.SlotActionType;
 
-public class AutoTotem extends Module implements PlayerHealthListener {
-
-    private boolean hadTotemLastTick = false;
+public class AutoTotem extends Module implements ReceivePacketListener {
 
     public AutoTotem() {
         super("AutoTotem");
         setCategory(Category.of("Combat"));
-        setDescription("Auto swap & refill totem (slot 8 → offhand)");
+        setDescription("Instant totem swap & refill (packet based)");
     }
 
     @Override
     public void onEnable() {
-        Aoba.getInstance().eventManager.AddListener(PlayerHealthListener.class, this);
+        Aoba.getInstance().eventManager.AddListener(ReceivePacketListener.class, this);
     }
 
     @Override
     public void onDisable() {
-        Aoba.getInstance().eventManager.RemoveListener(PlayerHealthListener.class, this);
+        Aoba.getInstance().eventManager.RemoveListener(ReceivePacketListener.class, this);
     }
 
-    // 🔧 FIX LỖI BUILD (Module yêu cầu)
     @Override
     public void onToggle() {
-        // Không cần logic gì ở đây
     }
 
     @Override
-    public void onHealthChanged(PlayerHealthEvent event) {
+    public void onReceivePacket(ReceivePacketEvent event) {
+        if (!(event.GetPacket() instanceof EntityStatusS2CPacket packet)) return;
+
+        // 35 = Totem pop
+        if (packet.getStatus() != 35) return;
+
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return;
 
-        ItemStack offhand = mc.player.getOffHandStack();
-        boolean hasTotemNow = offhand.getItem() == Items.TOTEM_OF_UNDYING;
+        // Chỉ xử lý khi chính mình pop totem
+        if (packet.getEntity(mc.world) != mc.player) return;
 
-        // Totem vừa bị vỡ
-        if (hadTotemLastTick && !hasTotemNow) {
-            handleTotemBreak();
-        }
-
-        hadTotemLastTick = hasTotemNow;
+        handleTotemPop();
     }
 
-    private void handleTotemBreak() {
+    private void handleTotemPop() {
         MinecraftClient mc = MinecraftClient.getInstance();
         PlayerInventory inv = mc.player.getInventory();
 
         int hotbarSlot = 8;
 
-        // 1️⃣ Nếu slot 8 chưa có totem → refill
+        // 1️⃣ Refill slot 8 nếu trống
         if (inv.getStack(hotbarSlot).getItem() != Items.TOTEM_OF_UNDYING) {
             int invSlot = findTotemInInventory();
             if (invSlot != -1) {
@@ -76,7 +67,6 @@ public class AutoTotem extends Module implements PlayerHealthListener {
         swapHotbarWithOffhand(hotbarSlot);
     }
 
-    // Tìm totem trong inventory (không tính hotbar)
     private int findTotemInInventory() {
         MinecraftClient mc = MinecraftClient.getInstance();
         PlayerInventory inv = mc.player.getInventory();
@@ -89,7 +79,6 @@ public class AutoTotem extends Module implements PlayerHealthListener {
         return -1;
     }
 
-    // Kéo totem về slot 8
     private void moveItem(int from, int to) {
         MinecraftClient mc = MinecraftClient.getInstance();
         int syncId = mc.player.currentScreenHandler.syncId;
@@ -98,14 +87,13 @@ public class AutoTotem extends Module implements PlayerHealthListener {
         mc.interactionManager.clickSlot(syncId, to, 0, SlotActionType.PICKUP, mc.player);
     }
 
-    // Swap slot 8 ↔ offhand
     private void swapHotbarWithOffhand(int hotbarSlot) {
         MinecraftClient mc = MinecraftClient.getInstance();
         int syncId = mc.player.currentScreenHandler.syncId;
 
         mc.interactionManager.clickSlot(
                 syncId,
-                45, // offhand slot
+                45, // offhand
                 hotbarSlot,
                 SlotActionType.SWAP,
                 mc.player
