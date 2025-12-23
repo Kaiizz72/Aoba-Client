@@ -1,138 +1,108 @@
 /*
  * Aoba Hacked Client
- * Copyright (C) 2019-2024 coltonk9043
- *
- * Licensed under the GNU General Public License, Version 3 or later.
- * See <http://www.gnu.org/licenses/>.
+ * AutoTotem Improved
  */
 
 package net.aoba.module.modules.combat;
 
 import net.aoba.Aoba;
 import net.aoba.event.events.PlayerHealthEvent;
-import net.aoba.event.events.ReceivePacketEvent;
 import net.aoba.event.listeners.PlayerHealthListener;
-import net.aoba.event.listeners.ReceivePacketListener;
 import net.aoba.module.Category;
 import net.aoba.module.Module;
-import net.aoba.settings.types.BooleanSetting;
-import net.aoba.settings.types.FloatSetting;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
-import net.minecraft.entity.EntityType;
 import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
-import net.minecraft.network.packet.s2c.play.EntitySpawnS2CPacket;
 import net.minecraft.screen.slot.SlotActionType;
-import net.minecraft.util.Hand;
 
-public class AutoTotem extends Module implements PlayerHealthListener, ReceivePacketListener {
+public class AutoTotem extends Module implements PlayerHealthListener {
 
-	private final FloatSetting healthTrigger = FloatSetting.builder().id("autototem_health").displayName("Health")
-			.description("The health at which the totem will be placed into your hand.").defaultValue(6.0f)
-			.minValue(1.0f).maxValue(20.0f).step(1.0f).build();
+    private boolean hadTotemLastTick = false;
 
-	private final FloatSetting crystalRadiusTrigger = FloatSetting.builder().id("autototem_crystal_radius")
-			.displayName("Crystal Radius")
-			.description("The radius at which a placed end crystal will trigger autototem.").defaultValue(6.0f)
-			.minValue(1.0f).maxValue(10.0f).step(1.0f).build();
+    public AutoTotem() {
+        super("AutoTotem");
+        setCategory(Category.of("Combat"));
+        setDescription("Auto swap & refill totem (slot 8 → offhand)");
+    }
 
-	private final BooleanSetting mainHand = BooleanSetting.builder().id("autototem_mainhand").displayName("Mainhand")
-			.description("Places totem in main hand instead of off-hand").defaultValue(false).build();
+    @Override
+    public void onEnable() {
+        Aoba.getInstance().eventManager.AddListener(PlayerHealthListener.class, this);
+    }
 
-	public AutoTotem() {
-		super("AutoTotem");
+    @Override
+    public void onDisable() {
+        Aoba.getInstance().eventManager.RemoveListener(PlayerHealthListener.class, this);
+    }
 
-		setCategory(Category.of("Combat"));
-		setDescription("Automatically replaced totems.");
+    @Override
+    public void onHealthChanged(PlayerHealthEvent event) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return;
 
-		addSetting(healthTrigger);
-		addSetting(crystalRadiusTrigger);
-		addSetting(mainHand);
-	}
+        ItemStack offhand = mc.player.getOffHandStack();
+        boolean hasTotemNow = offhand.getItem() == Items.TOTEM_OF_UNDYING;
 
-	@Override
-	public void onDisable() {
-		Aoba.getInstance().eventManager.RemoveListener(PlayerHealthListener.class, this);
-		Aoba.getInstance().eventManager.RemoveListener(ReceivePacketListener.class, this);
-	}
+        // Totem vừa vỡ
+        if (hadTotemLastTick && !hasTotemNow) {
+            handleTotemBreak();
+        }
 
-	@Override
-	public void onEnable() {
-		Aoba.getInstance().eventManager.AddListener(PlayerHealthListener.class, this);
-		Aoba.getInstance().eventManager.AddListener(ReceivePacketListener.class, this);
-	}
+        hadTotemLastTick = hasTotemNow;
+    }
 
-	@Override
-	public void onToggle() {
+    private void handleTotemBreak() {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        PlayerInventory inv = mc.player.getInventory();
 
-	}
+        int hotbarSlot = 8;
 
-	@Override
-	public void onHealthChanged(PlayerHealthEvent readPacketEvent) {
-		MinecraftClient mc = MinecraftClient.getInstance();
+        // 1️⃣ Nếu slot 8 chưa có totem → refill từ inventory
+        if (inv.getStack(hotbarSlot).getItem() != Items.TOTEM_OF_UNDYING) {
+            int invSlot = findTotemInInventory();
+            if (invSlot != -1) {
+                moveItem(invSlot, hotbarSlot);
+            }
+        }
 
-		// If current screen is a generic container, we want to prevent autototem from
-		// firing.
-		if (mc.currentScreen instanceof GenericContainerScreen)
-			return;
+        // 2️⃣ Swap slot 8 ↔ offhand (như nhấn F)
+        swapHotbarWithOffhand(hotbarSlot);
+    }
 
-		// If the current hand stack is a totem, return;
-		PlayerInventory inventory = mc.player.getInventory();
-		ItemStack handItemStack = inventory.getSelectedStack();
+    // Tìm totem trong inventory (không tính hotbar)
+    private int findTotemInInventory() {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        PlayerInventory inv = mc.player.getInventory();
 
-		if (handItemStack.getItem() == Items.TOTEM_OF_UNDYING)
-			return;
+        for (int i = 9; i < 36; i++) {
+            if (inv.getStack(i).getItem() == Items.TOTEM_OF_UNDYING) {
+                return i;
+            }
+        }
+        return -1;
+    }
 
-		// If the player health is below the Health Trigger, switch to the totem
-		if (readPacketEvent.getHealth() <= healthTrigger.getValue()) {
-			SwitchToTotem();
-		}
-	}
+    // Kéo totem về slot 8 (giống mở E rồi kéo)
+    private void moveItem(int from, int to) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        int syncId = mc.player.currentScreenHandler.syncId;
 
-	private void SwitchToTotem() {
-		MinecraftClient mc = MinecraftClient.getInstance();
+        mc.interactionManager.clickSlot(syncId, from, 0, SlotActionType.PICKUP, mc.player);
+        mc.interactionManager.clickSlot(syncId, to, 0, SlotActionType.PICKUP, mc.player);
+    }
 
-		PlayerInventory inventory = mc.player.getInventory();
+    // Swap slot 8 ↔ offhand (chuẩn Minecraft)
+    private void swapHotbarWithOffhand(int hotbarSlot) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        int syncId = mc.player.currentScreenHandler.syncId;
 
-		int slot = -1;
-		for (int i = 0; i <= 36; i++) {
-			ItemStack itemStackToCheck = inventory.getStack(i);
-			Item itemToCheck = itemStackToCheck.getItem();
-
-			if (itemToCheck == Items.TOTEM_OF_UNDYING) {
-				slot = i;
-				break;
-			}
-		}
-
-		if (slot != -1) {
-			mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, slot, 0, SlotActionType.PICKUP,
-					mc.player);
-			mc.player.setStackInHand(Hand.OFF_HAND, inventory.getStack(slot));
-		}
-	}
-
-	@Override
-	public void onReceivePacket(ReceivePacketEvent readPacketEvent) {
-		// Check to see if the packet is an entity spawn packet, and if the entity is an
-		// end crystal.
-		if (readPacketEvent.GetPacket() instanceof EntitySpawnS2CPacket spawnEntityPacket) {
-			if (spawnEntityPacket.getEntityType() == EntityType.END_CRYSTAL) {
-				// Check if the entity is within the range of the player, and switch immediately
-				// if so.
-				MinecraftClient mc = MinecraftClient.getInstance();
-
-				if (mc.player.getInventory().getSelectedStack().getItem() == Items.TOTEM_OF_UNDYING)
-					return;
-
-				if (mc.player.squaredDistanceTo(spawnEntityPacket.getX(), spawnEntityPacket.getY(),
-						spawnEntityPacket.getZ()) < Math.pow(crystalRadiusTrigger.getValue(), 2)) {
-					SwitchToTotem();
-				}
-			}
-		}
-	}
+        mc.interactionManager.clickSlot(
+                syncId,
+                45, // offhand slot
+                hotbarSlot,
+                SlotActionType.SWAP,
+                mc.player
+        );
+    }
 }
