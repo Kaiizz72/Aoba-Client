@@ -87,7 +87,12 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     /* ===================== TICK UPDATE ===================== */
 
     @Override
-    public void onTick(TickEvent event) {
+    public void onTick(TickEvent.Pre event) {
+        // Không cần làm gì ở Pre, chỉ để override
+    }
+
+    @Override
+    public void onTick(TickEvent.Post event) {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null || mc.world == null) return;
 
