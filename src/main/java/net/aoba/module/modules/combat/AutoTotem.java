@@ -19,7 +19,7 @@ public class AutoTotem extends Module implements ReceivePacketListener {
     private final FloatSetting delaySetting = FloatSetting.builder()
             .id("autototem_delay")
             .displayName("Delay (ms)")
-            .defaultValue(150f) // Delay tăng để tránh spam Inventory
+            .defaultValue(150f)
             .minValue(50f)
             .maxValue(300f)
             .step(10f)
@@ -34,6 +34,7 @@ public class AutoTotem extends Module implements ReceivePacketListener {
 
     private long lastAction = 0;
     private int stage = 0;
+    private boolean initialized = false; // Flag safe world load
 
     public AutoTotem() {
         super("AutoTotem");
@@ -47,6 +48,7 @@ public class AutoTotem extends Module implements ReceivePacketListener {
     public void onEnable() {
         Aoba.getInstance().eventManager.AddListener(ReceivePacketListener.class, this);
         stage = 0;
+        initialized = false; // reset flag
     }
 
     @Override
@@ -75,20 +77,26 @@ public class AutoTotem extends Module implements ReceivePacketListener {
 
     /* ===================== MAIN LOOP ===================== */
 
-    public void onUpdate() {
+    public void onUpdate() { // Không dùng @Override để compile
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null || mc.world == null) return;
+
+        // Chỉ bắt đầu refill khi thế giới đã load xong
+        if (!initialized) {
+            initialized = true;
+            return;
+        }
 
         PlayerInventory inv = mc.player.getInventory();
         long delay = Math.round(delaySetting.getValue());
 
-        // Stage machine để refill human-like
+        // Stage machine refill human-like
         if (stage > 0 && System.currentTimeMillis() - lastAction < delay) return;
 
-        // Nếu slot 8 trống → refill
+        // Slot 8 trống → refill
         if (inv.getStack(8).getItem() != Items.TOTEM_OF_UNDYING) {
             switch (stage) {
-                case 0 -> stage = 1; // bắt đầu refill
+                case 0 -> stage = 1;
                 case 1 -> { // Mở inventory nếu chưa mở
                     if (!(mc.currentScreen instanceof InventoryScreen)) {
                         mc.setScreen(new InventoryScreen(mc.player));
