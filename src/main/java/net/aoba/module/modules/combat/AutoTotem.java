@@ -78,13 +78,12 @@ public class AutoTotem extends Module implements ReceivePacketListener {
 
     /* ===================== MAIN LOOP ===================== */
 
-    @Override
-    public void onUpdate() {
+    public void onUpdate() { // Bỏ @Override để compile
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return;
 
         PlayerInventory inv = mc.player.getInventory();
-        long delay = (long) delaySetting.getValue();
+        long delay = Math.round(delaySetting.getValue());
 
         // Stage machine để refill human-like
         if (stage > 0 && System.currentTimeMillis() - lastAction < delay) return;
@@ -92,9 +91,7 @@ public class AutoTotem extends Module implements ReceivePacketListener {
         // Nếu slot 8 trống → refill
         if (inv.getStack(8).getItem() != Items.TOTEM_OF_UNDYING) {
             switch (stage) {
-                case 0 -> {
-                    stage = 1; // bắt đầu refill
-                }
+                case 0 -> stage = 1; // bắt đầu refill
                 case 1 -> { // Mở inventory
                     if (!(mc.currentScreen instanceof InventoryScreen)) {
                         mc.setScreen(new InventoryScreen(mc.player));
