@@ -10,6 +10,7 @@ import net.aoba.module.Module;
 import net.aoba.settings.types.BooleanSetting;
 import net.aoba.settings.types.FloatSetting;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gui.screen.ingame.InventoryScreen;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.Items;
 import net.minecraft.network.packet.s2c.play.EntityStatusS2CPacket;
@@ -88,7 +89,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
 
     @Override
     public void onTick(TickEvent.Pre event) {
-        // Không cần làm gì ở Pre, chỉ để override
+        // Không làm gì ở Pre
     }
 
     @Override
@@ -102,9 +103,9 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         PlayerInventory inv = mc.player.getInventory();
 
         switch (stage) {
-            case 2: // Open inventory human-like
+            case 2: // Mở Inventory GUI human-like
                 if (!inventoryOpen) {
-                    mc.options.keyInventory.setPressed(true); // nhấn E thật
+                    mc.setScreen(new InventoryScreen(mc.player)); // mở Inventory GUI
                     inventoryOpen = true;
                     lastAction = System.currentTimeMillis();
                 }
@@ -120,10 +121,9 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
                 lastAction = System.currentTimeMillis();
                 break;
 
-            case 4: // Thả phím E và ESC nếu bật
+            case 4: // Đóng Inventory (ESC) nếu bật
                 if (inventoryOpen) {
-                    mc.options.keyInventory.setPressed(false); // thả phím E
-                    if (autoEsc.getValue()) mc.setScreen(null); // ESC inventory
+                    if (autoEsc.getValue()) mc.setScreen(null);
                     inventoryOpen = false;
                 }
                 stage = 0; // reset stage
