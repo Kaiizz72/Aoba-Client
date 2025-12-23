@@ -112,7 +112,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
                 lastAction = System.currentTimeMillis();
                 break;
 
-            case 4: // Thả inventory và ESC nếu bật
+            case 4: // Thả inventory và ESC nếu bậtt
                 if (inventoryOpen) {
                     if (autoEsc.getValue()) mc.setScreen(null);
                     inventoryOpen = false;
