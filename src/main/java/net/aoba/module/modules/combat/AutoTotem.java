@@ -14,7 +14,6 @@ import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.Items;
 import net.minecraft.network.packet.s2c.play.EntityStatusS2CPacket;
 import net.minecraft.screen.slot.SlotActionType;
-import net.minecraft.util.Hand;
 
 public class AutoTotem extends Module implements ReceivePacketListener, TickListener {
 
@@ -35,7 +34,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     public AutoTotem() {
         super("AutoTotem");
         setCategory(Category.of("Combat"));
-        setDescription("Totem pop → di chuột vô totem → nhấn F → refill slot 8 → close inventory");
+        setDescription("Totem pop → di chuột vô totem → nhấn F (swap offhand) → refill slot 8 → close inventory");
         addSetting(autoEsc);
     }
 
@@ -69,7 +68,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
 
         if (System.currentTimeMillis() - lastAction < delay) return;
 
-        // Stage 1: mở inventory để di chuột vô totem
+        // Stage 1: mở inventory GUI
         mc.setScreen(new InventoryScreen(mc.player));
         inventoryOpen = true;
         stage = 2;
@@ -93,11 +92,12 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         PlayerInventory inv = mc.player.getInventory();
 
         switch (stage) {
-            case 2: // Di chuột vào slot chứa totem → nhấn F
+            case 2: // Di chuột vào slot chứa totem → nhấn F để swap offhand
                 int totemSlot = findTotemInInventory();
                 if (totemSlot != -1) {
                     mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, totemSlot, 0, SlotActionType.PICKUP, mc.player);
-                    mc.player.swingHand(Hand.MAIN_HAND); // nhấn F human-like
+                    mc.options.keySwapHands.setPressed(true); // nhấn F → swap offhand
+                    mc.options.keySwapHands.setPressed(false); // thả phím
                 }
                 stage = 3;
                 lastAction = System.currentTimeMillis();
