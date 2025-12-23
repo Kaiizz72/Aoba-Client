@@ -36,6 +36,12 @@ public class AutoTotem extends Module implements PlayerHealthListener {
         Aoba.getInstance().eventManager.RemoveListener(PlayerHealthListener.class, this);
     }
 
+    // 🔧 FIX LỖI BUILD (Module yêu cầu)
+    @Override
+    public void onToggle() {
+        // Không cần logic gì ở đây
+    }
+
     @Override
     public void onHealthChanged(PlayerHealthEvent event) {
         MinecraftClient mc = MinecraftClient.getInstance();
@@ -44,7 +50,7 @@ public class AutoTotem extends Module implements PlayerHealthListener {
         ItemStack offhand = mc.player.getOffHandStack();
         boolean hasTotemNow = offhand.getItem() == Items.TOTEM_OF_UNDYING;
 
-        // Totem vừa vỡ
+        // Totem vừa bị vỡ
         if (hadTotemLastTick && !hasTotemNow) {
             handleTotemBreak();
         }
@@ -58,7 +64,7 @@ public class AutoTotem extends Module implements PlayerHealthListener {
 
         int hotbarSlot = 8;
 
-        // 1️⃣ Nếu slot 8 chưa có totem → refill từ inventory
+        // 1️⃣ Nếu slot 8 chưa có totem → refill
         if (inv.getStack(hotbarSlot).getItem() != Items.TOTEM_OF_UNDYING) {
             int invSlot = findTotemInInventory();
             if (invSlot != -1) {
@@ -83,7 +89,7 @@ public class AutoTotem extends Module implements PlayerHealthListener {
         return -1;
     }
 
-    // Kéo totem về slot 8 (giống mở E rồi kéo)
+    // Kéo totem về slot 8
     private void moveItem(int from, int to) {
         MinecraftClient mc = MinecraftClient.getInstance();
         int syncId = mc.player.currentScreenHandler.syncId;
@@ -92,7 +98,7 @@ public class AutoTotem extends Module implements PlayerHealthListener {
         mc.interactionManager.clickSlot(syncId, to, 0, SlotActionType.PICKUP, mc.player);
     }
 
-    // Swap slot 8 ↔ offhand (chuẩn Minecraft)
+    // Swap slot 8 ↔ offhand
     private void swapHotbarWithOffhand(int hotbarSlot) {
         MinecraftClient mc = MinecraftClient.getInstance();
         int syncId = mc.player.currentScreenHandler.syncId;
