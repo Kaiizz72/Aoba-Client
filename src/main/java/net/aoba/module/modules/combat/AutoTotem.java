@@ -2,20 +2,21 @@ package net.aoba.module.modules.combat;
 
 import net.aoba.Aoba;
 import net.aoba.event.events.ReceivePacketEvent;
+import net.aoba.event.events.TickEvent;
 import net.aoba.event.listeners.ReceivePacketListener;
+import net.aoba.event.listeners.TickListener;
 import net.aoba.module.Category;
 import net.aoba.module.Module;
 import net.aoba.settings.types.BooleanSetting;
 import net.aoba.settings.types.FloatSetting;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.ingame.InventoryScreen;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.Items;
 import net.minecraft.network.packet.s2c.play.EntityStatusS2CPacket;
 import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.util.Hand;
 
-public class AutoTotem extends Module implements ReceivePacketListener {
+public class AutoTotem extends Module implements ReceivePacketListener, TickListener {
 
     private final FloatSetting delaySetting = FloatSetting.builder()
             .id("autototem_delay")
@@ -48,6 +49,7 @@ public class AutoTotem extends Module implements ReceivePacketListener {
     @Override
     public void onEnable() {
         Aoba.getInstance().eventManager.AddListener(ReceivePacketListener.class, this);
+        Aoba.getInstance().eventManager.AddListener(TickListener.class, this); // đăng ký tick
         stage = 0;
         inventoryOpen = false;
     }
@@ -55,6 +57,7 @@ public class AutoTotem extends Module implements ReceivePacketListener {
     @Override
     public void onDisable() {
         Aoba.getInstance().eventManager.RemoveListener(ReceivePacketListener.class, this);
+        Aoba.getInstance().eventManager.RemoveListener(TickListener.class, this);
         stage = 0;
     }
 
@@ -81,9 +84,10 @@ public class AutoTotem extends Module implements ReceivePacketListener {
         lastAction = System.currentTimeMillis();
     }
 
-    /* ===================== UPDATE LOOP ===================== */
+    /* ===================== TICK UPDATE ===================== */
 
-    public void onUpdate() { // tick update
+    @Override
+    public void onTick(TickEvent event) {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null || mc.world == null) return;
 
@@ -95,7 +99,7 @@ public class AutoTotem extends Module implements ReceivePacketListener {
         switch (stage) {
             case 2: // Open inventory human-like
                 if (!inventoryOpen) {
-                    mc.setScreen(new InventoryScreen(mc.player));
+                    mc.options.keyInventory.setPressed(true); // nhấn E thật
                     inventoryOpen = true;
                     lastAction = System.currentTimeMillis();
                 }
@@ -111,9 +115,10 @@ public class AutoTotem extends Module implements ReceivePacketListener {
                 lastAction = System.currentTimeMillis();
                 break;
 
-            case 4: // Close inventory nếu bật autoEsc
-                if (autoEsc.getValue() && mc.currentScreen instanceof InventoryScreen) {
-                    mc.setScreen(null);
+            case 4: // Thả phím E và ESC nếu bật
+                if (inventoryOpen) {
+                    mc.options.keyInventory.setPressed(false); // thả phím E
+                    if (autoEsc.getValue()) mc.setScreen(null); // ESC inventory
                     inventoryOpen = false;
                 }
                 stage = 0; // reset stage
