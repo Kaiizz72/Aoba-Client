@@ -13,6 +13,7 @@ import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.Items;
 import net.minecraft.network.packet.s2c.play.EntityStatusS2CPacket;
 import net.minecraft.screen.slot.SlotActionType;
+import net.minecraft.util.Hand;
 
 public class AutoTotem extends Module implements ReceivePacketListener {
 
@@ -27,19 +28,19 @@ public class AutoTotem extends Module implements ReceivePacketListener {
 
     private final BooleanSetting autoEsc = BooleanSetting.builder()
             .id("autototem_autoesc")
-            .displayName("Auto ESC Inventory")
-            .description("Automatically ESC out of inventory after refill")
+            .displayName("Auto ESC")
+            .description("Automatically ESC after refill")
             .defaultValue(true)
             .build();
 
     private long lastAction = 0;
-    private int stage = 0;
-    private boolean initialized = false; // Flag safe world load
+    private int stage = 0; // stage machine
+    private boolean inventoryOpen = false;
 
     public AutoTotem() {
         super("AutoTotem");
         setCategory(Category.of("Combat"));
-        setDescription("Safe Human-like AutoTotem with slot 8 always full and auto ESC");
+        setDescription("Totem pop → swap offhand → open E → refill slot 8 → close E");
         addSetting(delaySetting);
         addSetting(autoEsc);
     }
@@ -48,7 +49,7 @@ public class AutoTotem extends Module implements ReceivePacketListener {
     public void onEnable() {
         Aoba.getInstance().eventManager.AddListener(ReceivePacketListener.class, this);
         stage = 0;
-        initialized = false; // reset flag
+        inventoryOpen = false;
     }
 
     @Override
@@ -70,57 +71,54 @@ public class AutoTotem extends Module implements ReceivePacketListener {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null || mc.world == null || packet.getEntity(mc.world) != mc.player) return;
 
-        swapHotbarWithOffhand(8); // Swap slot 8 -> offhand
-        stage = 1; // Start refill stage
+        long delay = Math.round(delaySetting.getValue());
+        if (System.currentTimeMillis() - lastAction < delay) return;
+
+        // Stage 1: swap slot 8 -> offhand
+        swapHotbarWithOffhand(8);
+        mc.player.swingHand(Hand.MAIN_HAND); // nhấn F human-like
+        stage = 2;
         lastAction = System.currentTimeMillis();
     }
 
-    /* ===================== MAIN LOOP ===================== */
+    /* ===================== UPDATE LOOP ===================== */
 
-    public void onUpdate() { // Không dùng @Override để compile
+    public void onUpdate() { // tick update
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null || mc.world == null) return;
 
-        // Chỉ bắt đầu refill khi thế giới đã load xong
-        if (!initialized) {
-            initialized = true;
-            return;
-        }
+        long delay = Math.round(delaySetting.getValue());
+        if (System.currentTimeMillis() - lastAction < delay) return;
 
         PlayerInventory inv = mc.player.getInventory();
-        long delay = Math.round(delaySetting.getValue());
 
-        // Stage machine refill human-like
-        if (stage > 0 && System.currentTimeMillis() - lastAction < delay) return;
+        switch (stage) {
+            case 2: // Open inventory human-like
+                if (!inventoryOpen) {
+                    mc.setScreen(new InventoryScreen(mc.player));
+                    inventoryOpen = true;
+                    lastAction = System.currentTimeMillis();
+                }
+                stage = 3;
+                break;
 
-        // Slot 8 trống → refill
-        if (inv.getStack(8).getItem() != Items.TOTEM_OF_UNDYING) {
-            switch (stage) {
-                case 0 -> stage = 1;
-                case 1 -> { // Mở inventory nếu chưa mở
-                    if (!(mc.currentScreen instanceof InventoryScreen)) {
-                        mc.setScreen(new InventoryScreen(mc.player));
-                    }
-                    stage = 2;
+            case 3: // Refill slot 8 nếu trống
+                if (inv.getStack(8).getItem() != Items.TOTEM_OF_UNDYING) {
+                    int totemSlot = findTotemInInventory();
+                    if (totemSlot != -1) moveItem(totemSlot, 8);
                 }
-                case 2 -> { // Kéo totem từ kho xuống slot 8
-                    int invSlot = findTotemInInventory();
-                    if (invSlot != -1) moveItem(invSlot, 8);
-                    stage = 3;
+                stage = 4;
+                lastAction = System.currentTimeMillis();
+                break;
+
+            case 4: // Close inventory nếu bật autoEsc
+                if (autoEsc.getValue() && mc.currentScreen instanceof InventoryScreen) {
+                    mc.setScreen(null);
+                    inventoryOpen = false;
                 }
-                case 3 -> { // Delay 1 tick giả lập hành động người
-                    stage = 4;
-                }
-                case 4 -> { // ESC tự động nếu bật
-                    if (autoEsc.getValue() && mc.currentScreen instanceof InventoryScreen) {
-                        mc.setScreen(null);
-                    }
-                    stage = 0; // Hoàn tất refill
-                }
-            }
-            lastAction = System.currentTimeMillis();
-        } else {
-            stage = 0; // Slot 8 đầy → stage reset
+                stage = 0; // reset stage
+                lastAction = System.currentTimeMillis();
+                break;
         }
     }
 
@@ -128,7 +126,7 @@ public class AutoTotem extends Module implements ReceivePacketListener {
 
     private int findTotemInInventory() {
         PlayerInventory inv = MinecraftClient.getInstance().player.getInventory();
-        for (int i = 9; i < 36; i++) {
+        for (int i = 9; i < 36; i++) { // kiểm tra kho
             if (inv.getStack(i).getItem() == Items.TOTEM_OF_UNDYING) {
                 return i;
             }
@@ -139,19 +137,12 @@ public class AutoTotem extends Module implements ReceivePacketListener {
     private void moveItem(int from, int to) {
         MinecraftClient mc = MinecraftClient.getInstance();
         int syncId = mc.player.currentScreenHandler.syncId;
-
         mc.interactionManager.clickSlot(syncId, from, 0, SlotActionType.PICKUP, mc.player);
         mc.interactionManager.clickSlot(syncId, to, 0, SlotActionType.PICKUP, mc.player);
     }
 
     private void swapHotbarWithOffhand(int slot) {
         MinecraftClient mc = MinecraftClient.getInstance();
-        mc.interactionManager.clickSlot(
-                mc.player.currentScreenHandler.syncId,
-                45, // offhand
-                slot,
-                SlotActionType.SWAP,
-                mc.player
-        );
+        mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, 45, slot, SlotActionType.SWAP, mc.player);
     }
 }
