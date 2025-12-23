@@ -19,10 +19,10 @@ public class AutoTotem extends Module implements ReceivePacketListener {
     private final FloatSetting delaySetting = FloatSetting.builder()
             .id("autototem_delay")
             .displayName("Delay (ms)")
-            .defaultValue(120f)
-            .minValue(0f)
+            .defaultValue(150f) // Delay tăng để tránh spam Inventory
+            .minValue(50f)
             .maxValue(300f)
-            .step(20f)
+            .step(10f)
             .build();
 
     private final BooleanSetting autoEsc = BooleanSetting.builder()
@@ -33,13 +33,12 @@ public class AutoTotem extends Module implements ReceivePacketListener {
             .build();
 
     private long lastAction = 0;
-    private boolean waitingRefill = false;
     private int stage = 0;
 
     public AutoTotem() {
         super("AutoTotem");
         setCategory(Category.of("Combat"));
-        setDescription("Human-like AutoTotem with slot 8 always full and auto ESC");
+        setDescription("Safe Human-like AutoTotem with slot 8 always full and auto ESC");
         addSetting(delaySetting);
         addSetting(autoEsc);
     }
@@ -47,7 +46,6 @@ public class AutoTotem extends Module implements ReceivePacketListener {
     @Override
     public void onEnable() {
         Aoba.getInstance().eventManager.AddListener(ReceivePacketListener.class, this);
-        waitingRefill = false;
         stage = 0;
     }
 
@@ -68,19 +66,18 @@ public class AutoTotem extends Module implements ReceivePacketListener {
         if (packet.getStatus() != 35) return; // Totem pop
 
         MinecraftClient mc = MinecraftClient.getInstance();
-        if (mc.player == null || packet.getEntity(mc.world) != mc.player) return;
+        if (mc.player == null || mc.world == null || packet.getEntity(mc.world) != mc.player) return;
 
         swapHotbarWithOffhand(8); // Swap slot 8 -> offhand
-        waitingRefill = true;
-        stage = 1;
+        stage = 1; // Start refill stage
         lastAction = System.currentTimeMillis();
     }
 
     /* ===================== MAIN LOOP ===================== */
 
-    public void onUpdate() { // Bỏ @Override để compile
+    public void onUpdate() {
         MinecraftClient mc = MinecraftClient.getInstance();
-        if (mc.player == null) return;
+        if (mc.player == null || mc.world == null) return;
 
         PlayerInventory inv = mc.player.getInventory();
         long delay = Math.round(delaySetting.getValue());
@@ -92,7 +89,7 @@ public class AutoTotem extends Module implements ReceivePacketListener {
         if (inv.getStack(8).getItem() != Items.TOTEM_OF_UNDYING) {
             switch (stage) {
                 case 0 -> stage = 1; // bắt đầu refill
-                case 1 -> { // Mở inventory
+                case 1 -> { // Mở inventory nếu chưa mở
                     if (!(mc.currentScreen instanceof InventoryScreen)) {
                         mc.setScreen(new InventoryScreen(mc.player));
                     }
