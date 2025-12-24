@@ -20,24 +20,34 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     private final BooleanSetting autoEsc = BooleanSetting.builder()
             .id("autototem_autoesc")
             .displayName("Auto ESC")
-            .description("Automatically ESC after refill")
+            .description("Tự động đóng túi đồ sau khi refill")
             .defaultValue(true)
             .build();
 
-    private boolean inventoryOpen = false;
-    private boolean totemPopDetected = false;
+    // Trạng thái
+    private boolean isRefilling = false;
+    private long lastTime = 0;
+    
+    // Các bước thực hiện
+    private enum Step {
+        NONE,
+        WAIT_SWAP_OFFHAND,
+        WAIT_OPEN_INV,
+        WAIT_REFILL,
+        WAIT_CLOSE_INV
+    }
+    private Step currentStep = Step.NONE;
 
-    private long lastSwap = 0;
-    private long lastRefill = 0;
-
-    private final long swapDelay = 300;   // ms
-    private final long refillDelay = 400; // ms
-    private final long escDelay = 200;    // ms
+    // Delay config (ms) - Chỉnh số này nếu mạng lag
+    private final long DELAY_SWAP = 100;   // Delay trước khi swap offhand
+    private final long DELAY_OPEN = 200;   // Delay trước khi mở túi
+    private final long DELAY_CLICK = 150;  // Delay chờ túi mở hẳn rồi mới click
+    private final long DELAY_CLOSE = 150;  // Delay sau khi click rồi mới đóng
 
     public AutoTotem() {
         super("AutoTotem");
         setCategory(Category.of("Combat"));
-        setDescription("Totem offhand vỡ → swap slot 8 → refill slot 8 → auto ESC bật/tắt, lặp lại liên tục");
+        setDescription("Totem Pop -> Swap Offhand -> Open Inv -> Refill -> Close Inv");
         addSetting(autoEsc);
     }
 
@@ -45,99 +55,135 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     public void onEnable() {
         Aoba.getInstance().eventManager.AddListener(ReceivePacketListener.class, this);
         Aoba.getInstance().eventManager.AddListener(TickListener.class, this);
-        totemPopDetected = false;
-        inventoryOpen = false;
-        lastSwap = lastRefill = 0;
+        reset();
     }
 
     @Override
     public void onDisable() {
         Aoba.getInstance().eventManager.RemoveListener(ReceivePacketListener.class, this);
         Aoba.getInstance().eventManager.RemoveListener(TickListener.class, this);
-        totemPopDetected = false;
-        inventoryOpen = false;
+        reset();
     }
 
-    @Override
-    public void onToggle() {}
+    private void reset() {
+        currentStep = Step.NONE;
+        isRefilling = false;
+    }
 
-    /* ===================== TOTEM POP ===================== */
-
+    // 1. BẮT GÓI TIN TOTEM POP
     @Override
     public void onReceivePacket(ReceivePacketEvent event) {
-        if (!(event.GetPacket() instanceof EntityStatusS2CPacket packet)) return;
-        if (packet.getStatus() != 35) return; // Totem pop
-
-        MinecraftClient mc = MinecraftClient.getInstance();
-        if (mc.player == null || mc.world == null || packet.getEntity(mc.world) != mc.player) return;
-
-        totemPopDetected = true;
-        lastSwap = System.currentTimeMillis();
-        lastRefill = 0;
+        if (mc.player == null || mc.world == null) return;
+        
+        if (event.GetPacket() instanceof EntityStatusS2CPacket packet) {
+            if (packet.getStatus() == 35) { // 35 = Totem Pop animation
+                if (packet.getEntity(mc.world) == mc.player) {
+                    // Kích hoạt quy trình
+                    isRefilling = true;
+                    currentStep = Step.WAIT_SWAP_OFFHAND;
+                    lastTime = System.currentTimeMillis();
+                }
+            }
+        }
     }
 
-    /* ===================== TICK UPDATE ===================== */
-
+    // 2. XỬ LÝ LOGIC THEO TỪNG TICK
     @Override
-    public void onTick(TickEvent.Pre event) {}
-
-    @Override
-    public void onTick(TickEvent.Post event) {
-        MinecraftClient mc = MinecraftClient.getInstance();
-        if (mc.player == null || mc.world == null) return;
-        if (!totemPopDetected) return;
+    public void onTick(TickEvent.Pre event) {
+        if (mc.player == null || !isRefilling) return;
 
         long now = System.currentTimeMillis();
 
-        // Stage 1: Swap slot 8 → offhand
-        if (now - lastSwap >= swapDelay) {
-            swapSlot8ToOffhand();
-            lastRefill = now;
-            lastSwap = now;
-        }
+        switch (currentStep) {
+            case WAIT_SWAP_OFFHAND:
+                if (now - lastTime >= DELAY_SWAP) {
+                    // Thực hiện Swap slot 8 (đang có totem) vào Offhand
+                    swapSlot8ToOffhand();
+                    
+                    // Chuyển sang bước chờ mở túi
+                    currentStep = Step.WAIT_OPEN_INV;
+                    lastTime = now;
+                }
+                break;
 
-        // Stage 2: Refill slot 8 từ inventory
-        if (lastRefill > 0 && now - lastRefill >= refillDelay) {
-            mc.setScreen(new InventoryScreen(mc.player));
-            inventoryOpen = true;
-            refillSlot8();
-            lastRefill = now;
-        }
+            case WAIT_OPEN_INV:
+                if (now - lastTime >= DELAY_OPEN) {
+                    // Nếu slot 8 đã trống (do swap đi rồi), thì mở túi để refill
+                    // Nếu slot 8 vẫn còn đồ thì thôi, coi như lỗi hoặc đã đầy
+                    if (mc.player.getInventory().getStack(8).isEmpty()) {
+                        mc.setScreen(new InventoryScreen(mc.player));
+                        currentStep = Step.WAIT_REFILL;
+                    } else {
+                        reset(); // Slot 8 không trống, hủy kèo
+                    }
+                    lastTime = now;
+                }
+                break;
 
-        // Stage 3: Auto ESC
-        if (inventoryOpen && autoEsc.getValue() && now - lastRefill >= escDelay) {
-            mc.setScreen(null);
-            inventoryOpen = false;
-            totemPopDetected = false; // reset để lặp lại
+            case WAIT_REFILL:
+                // Chỉ refill khi màn hình ĐÃ LÀ InventoryScreen
+                if (mc.currentScreen instanceof InventoryScreen) {
+                    if (now - lastTime >= DELAY_CLICK) {
+                        boolean success = refillSlot8();
+                        
+                        if (success && autoEsc.getValue()) {
+                            currentStep = Step.WAIT_CLOSE_INV;
+                        } else {
+                            reset(); // Refill xong mà ko auto close hoặc lỗi
+                        }
+                        lastTime = now;
+                    }
+                } else {
+                    // Nếu vì lý do gì đó mà túi bị đóng mất tiêu
+                    if (now - lastTime > 2000) reset(); // Timeout
+                }
+                break;
+
+            case WAIT_CLOSE_INV:
+                if (now - lastTime >= DELAY_CLOSE) {
+                    mc.setScreen(null);
+                    reset(); // Hoàn thành
+                }
+                break;
+                
+            default:
+                break;
         }
     }
 
-    /* ===================== UTILS ===================== */
+    @Override
+    public void onTick(TickEvent.Post event) {}
+
+    // --- CÁC HÀM XỬ LÝ CLICK ---
 
     private void swapSlot8ToOffhand() {
-        MinecraftClient mc = MinecraftClient.getInstance();
-        PlayerInventory inv = mc.player.getInventory();
-        if (inv.getStack(8).isEmpty()) return;
+        // Slot Offhand ID trong Inventory Container là 45
+        // Button 8 đại diện cho Hotbar Slot 9 (Index 8)
+        // Lệnh này: Swap item tại Slot 45 với Hotbar Slot 8
         int syncId = mc.player.currentScreenHandler.syncId;
         mc.interactionManager.clickSlot(syncId, 45, 8, SlotActionType.SWAP, mc.player);
     }
 
-    private void refillSlot8() {
-        MinecraftClient mc = MinecraftClient.getInstance();
+    private boolean refillSlot8() {
         PlayerInventory inv = mc.player.getInventory();
-        if (!inv.getStack(8).isEmpty()) return;
-        int backupSlot = findTotemInInventory();
-        if (backupSlot == -1) return;
-        int syncId = mc.player.currentScreenHandler.syncId;
-        mc.interactionManager.clickSlot(syncId, backupSlot, 0, SlotActionType.PICKUP, mc.player);
-        mc.interactionManager.clickSlot(syncId, 8, 0, SlotActionType.PICKUP, mc.player);
-    }
-
-    private int findTotemInInventory() {
-        PlayerInventory inv = MinecraftClient.getInstance().player.getInventory();
+        
+        // Tìm totem ở kho chính (9 -> 35)
+        int sourceSlot = -1;
         for (int i = 9; i < 36; i++) {
-            if (inv.getStack(i).getItem() == Items.TOTEM_OF_UNDYING) return i;
+            if (inv.getStack(i).getItem() == Items.TOTEM_OF_UNDYING) {
+                sourceSlot = i;
+                break;
+            }
         }
-        return -1;
+
+        if (sourceSlot != -1) {
+            // Lệnh này: Swap item tại sourceSlot với Hotbar Slot 8
+            // Item từ kho sẽ bay xuống slot 8
+            int syncId = mc.player.currentScreenHandler.syncId;
+            mc.interactionManager.clickSlot(syncId, sourceSlot, 8, SlotActionType.SWAP, mc.player);
+            return true;
+        }
+        
+        return false; // Không tìm thấy totem dự trữ
     }
 }
