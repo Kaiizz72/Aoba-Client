@@ -34,14 +34,14 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     public AutoTotem() {
         super("AutoTotem");
         setCategory(Category.of("Combat"));
-        setDescription("Totem pop → di chuột vô totem → nhấn F (swap offhand) → refill slot 8 → close inventory");
+        setDescription("Totem pop → swap totem vào offhand → refill slot 8 → close inventory");
         addSetting(autoEsc);
     }
 
     @Override
     public void onEnable() {
         Aoba.getInstance().eventManager.AddListener(ReceivePacketListener.class, this);
-        Aoba.getInstance().eventManager.AddListener(TickListener.class, this); // đăng ký tick
+        Aoba.getInstance().eventManager.AddListener(TickListener.class, this);
         stage = 0;
         inventoryOpen = false;
     }
@@ -92,12 +92,11 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         PlayerInventory inv = mc.player.getInventory();
 
         switch (stage) {
-            case 2: // Di chuột vào slot chứa totem → nhấn F để swap offhand
+            case 2: // Swap totem vào offhand
                 int totemSlot = findTotemInInventory();
                 if (totemSlot != -1) {
-                    mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, totemSlot, 0, SlotActionType.PICKUP, mc.player);
-                    mc.options.keySwapHands.setPressed(true); // nhấn F → swap offhand
-                    mc.options.keySwapHands.setPressed(false); // thả phím
+                    // Slot 45 = offhand, swap với inventory slot chứa totem
+                    mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, 45, totemSlot, SlotActionType.SWAP, mc.player);
                 }
                 stage = 3;
                 lastAction = System.currentTimeMillis();
@@ -112,7 +111,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
                 lastAction = System.currentTimeMillis();
                 break;
 
-            case 4: // Thả inventory và ESC nếu bậtt
+            case 4: // Thả inventory và ESC nếu bật
                 if (inventoryOpen) {
                     if (autoEsc.getValue()) mc.setScreen(null);
                     inventoryOpen = false;
