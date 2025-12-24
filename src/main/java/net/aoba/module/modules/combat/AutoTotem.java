@@ -12,10 +12,13 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.InventoryScreen;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.Items;
+import net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket; // Gói tin hành động
 import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
 import net.minecraft.network.packet.s2c.play.EntityStatusS2CPacket;
 import net.minecraft.screen.slot.SlotActionType;
-import net.minecraft.text.Text; // Dùng để chat
+import net.minecraft.text.Text;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
 import java.lang.reflect.Field;
 
 public class AutoTotem extends Module implements ReceivePacketListener, TickListener {
@@ -42,8 +45,12 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     }
     private Step currentStep = Step.NONE;
 
-    // Tăng delay lên một chút để mắt thường nhìn thấy kịp animation
-    private final long DELAY_COMMON = 100; // 100ms mỗi bước
+    // --- CẤU HÌNH DELAY (AN TOÀN) ---
+    // Nếu mạng ngon, bạn có thể giảm xuống 150 hoặc 100
+    private final long DELAY_SLOT = 50;    // Chọn slot nhanh
+    private final long DELAY_SWAP = 250;   // Quan trọng: Chờ server nhận slot 8 xong mới Swap
+    private final long DELAY_OPEN = 200;   // Chờ Swap xong mới mở túi
+    private final long DELAY_ACTION = 200; // Các thao tác trong túi
 
     public AutoTotem() {
         super("AutoTotem");
@@ -74,9 +81,8 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     }
 
     private void debug(String msg) {
-        // Gửi tin nhắn client để biết code đang chạy tới đâu (Xóa dòng này nếu thấy phiền)
         if (mc.player != null) {
-            mc.player.sendMessage(Text.of("§7[AutoTotem] " + msg), true);
+            mc.player.sendMessage(Text.of("§b[AutoTotem] " + msg), true);
         }
     }
 
@@ -87,8 +93,8 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         if (event.GetPacket() instanceof EntityStatusS2CPacket packet) {
             if (packet.getStatus() == 35) { 
                 if (packet.getEntity(mc.world) == mc.player) {
-                    if (!isRefilling) { // Chỉ kích hoạt nếu chưa chạy
-                        debug("§cDetected Pop! Starting sequence...");
+                    if (!isRefilling) { 
+                        // debug("§cPop! Bắt đầu quy trình...");
                         isRefilling = true;
                         currentStep = Step.STEP_1_SELECT_SLOT_8;
                         lastTime = System.currentTimeMillis();
@@ -106,11 +112,11 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
 
         switch (currentStep) {
             case STEP_1_SELECT_SLOT_8:
-                // Bước 1: Cuộn chuột xuống slot cuối
-                if (now - lastTime >= 50) { // Nhanh
-                    setSlotVisual(8); // Set hình ảnh
+                // Bước 1: Cuộn chuột & Báo server
+                if (now - lastTime >= DELAY_SLOT) { 
+                    setSlotVisual(8); // Chỉnh hình ảnh Client
                     if (mc.getNetworkHandler() != null) {
-                        mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(8)); // Báo server
+                        mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(8)); // Báo Server
                     }
                     
                     currentStep = Step.STEP_2_PRESS_F;
@@ -119,12 +125,16 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
                 break;
 
             case STEP_2_PRESS_F:
-                // Bước 2: Giả lập ấn F (Swap)
-                if (now - lastTime >= DELAY_COMMON) {
-                    // Trong container của người chơi (không mở túi), slot 45 là Offhand
-                    // Click vào slot 45 với button 8 (Hotbar slot 9) dùng kiểu SWAP
-                    // Đây chính xác là hành động ấn F
-                    mc.interactionManager.clickSlot(0, 45, 8, SlotActionType.SWAP, mc.player);
+                // Bước 2: Gửi gói tin SWAP (Giả lập phím F chuẩn)
+                // Phải đợi DELAY_SWAP để chắc chắn Server đã biết mình đang cầm slot 8
+                if (now - lastTime >= DELAY_SWAP) {
+                    if (mc.getNetworkHandler() != null) {
+                        mc.getNetworkHandler().sendPacket(new PlayerActionC2SPacket(
+                            PlayerActionC2SPacket.Action.SWAP_ITEM_WITH_OFFHAND, 
+                            BlockPos.ORIGIN, 
+                            Direction.DOWN
+                        ));
+                    }
                     
                     currentStep = Step.STEP_3_OPEN_INV;
                     lastTime = now;
@@ -133,12 +143,14 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
 
             case STEP_3_OPEN_INV:
                 // Bước 3: Mở túi
-                if (now - lastTime >= DELAY_COMMON) {
+                if (now - lastTime >= DELAY_OPEN) {
+                    // Kiểm tra xem đã thực sự swap chưa (Slot 8 phải trống hoặc khác totem cũ)
                     if (mc.player.getInventory().getStack(8).isEmpty()) {
                         mc.setScreen(new InventoryScreen(mc.player));
                         currentStep = Step.STEP_4_REFILL;
                     } else {
-                        debug("§eSlot 8 not empty? Resetting.");
+                        // Nếu vẫn còn đồ ở slot 8 -> Swap thất bại do lag -> Thử lại hoặc reset
+                        // debug("§eLỗi: Chưa swap được! Reset.");
                         reset(); 
                     }
                     lastTime = now;
@@ -148,7 +160,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
             case STEP_4_REFILL:
                 // Bước 4: Refill
                 if (mc.currentScreen instanceof InventoryScreen) {
-                    if (now - lastTime >= DELAY_COMMON + 50) { // Chờ load túi
+                    if (now - lastTime >= DELAY_ACTION) { 
                         boolean success = refillSlot8(); 
                         if (success && autoEsc.getValue()) {
                             currentStep = Step.STEP_5_CLOSE_INV;
@@ -164,9 +176,9 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
 
             case STEP_5_CLOSE_INV:
                 // Bước 5: Đóng túi
-                if (now - lastTime >= DELAY_COMMON) {
+                if (now - lastTime >= DELAY_ACTION) {
                     mc.setScreen(null);
-                    debug("§aDone!");
+                    // debug("§aXong!");
                     reset();
                 }
                 break;
@@ -181,12 +193,10 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
 
     // --- HELPER FIX VISUAL ---
 
-    // Hàm này thử mọi cách để set slot 8 hiển thị lên màn hình
     private void setSlotVisual(int slotIndex) {
         PlayerInventory inv = mc.player.getInventory();
         boolean success = false;
         
-        // 1. Thử tên chuẩn "selectedSlot"
         try {
             Field f = PlayerInventory.class.getDeclaredField("selectedSlot");
             f.setAccessible(true);
@@ -194,7 +204,6 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
             success = true;
         } catch (Exception ignored) {}
 
-        // 2. Thử tên mapping cũ "currentItem"
         if (!success) {
             try {
                 Field f = PlayerInventory.class.getDeclaredField("currentItem");
@@ -204,7 +213,6 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
             } catch (Exception ignored) {}
         }
         
-        // 3. Thử tên obfuscated "field_7545" (Tên gốc của Minecraft)
         if (!success) {
             try {
                 Field f = PlayerInventory.class.getDeclaredField("field_7545");
