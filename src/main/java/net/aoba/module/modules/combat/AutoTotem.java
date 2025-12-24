@@ -24,16 +24,20 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
             .defaultValue(true)
             .build();
 
-    private long lastAction = 0;
-    private int stage = 0;
     private boolean inventoryOpen = false;
+    private boolean totemPopDetected = false;
 
-    private final long delay = 200; // human-like delay
+    private long lastSwap = 0;
+    private long lastRefill = 0;
+
+    private final long swapDelay = 300;   // ms
+    private final long refillDelay = 400; // ms
+    private final long escDelay = 200;    // ms
 
     public AutoTotem() {
         super("AutoTotem");
         setCategory(Category.of("Combat"));
-        setDescription("Totem offhand vỡ → swap slot 8 → refill slot 8 → auto ESC bật/tắt");
+        setDescription("Totem offhand vỡ → swap slot 8 → refill slot 8 → auto ESC bật/tắt, lặp lại liên tục");
         addSetting(autoEsc);
     }
 
@@ -41,15 +45,17 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     public void onEnable() {
         Aoba.getInstance().eventManager.AddListener(ReceivePacketListener.class, this);
         Aoba.getInstance().eventManager.AddListener(TickListener.class, this);
-        stage = 0;
+        totemPopDetected = false;
         inventoryOpen = false;
+        lastSwap = lastRefill = 0;
     }
 
     @Override
     public void onDisable() {
         Aoba.getInstance().eventManager.RemoveListener(ReceivePacketListener.class, this);
         Aoba.getInstance().eventManager.RemoveListener(TickListener.class, this);
-        stage = 0;
+        totemPopDetected = false;
+        inventoryOpen = false;
     }
 
     @Override
@@ -65,15 +71,9 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null || mc.world == null || packet.getEntity(mc.world) != mc.player) return;
 
-        if (System.currentTimeMillis() - lastAction < delay) return;
-
-        // Stage 1: swap slot 8 → offhand
-        swapSlot8ToOffhand();
-        // Stage 2: mở inventory refill slot 8
-        mc.setScreen(new InventoryScreen(mc.player));
-        inventoryOpen = true;
-        stage = 2;
-        lastAction = System.currentTimeMillis();
+        totemPopDetected = true;
+        lastSwap = System.currentTimeMillis();
+        lastRefill = 0;
     }
 
     /* ===================== TICK UPDATE ===================== */
@@ -85,14 +85,30 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     public void onTick(TickEvent.Post event) {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null || mc.world == null) return;
+        if (!totemPopDetected) return;
 
-        if (stage == 2 && System.currentTimeMillis() - lastAction >= delay && inventoryOpen) {
+        long now = System.currentTimeMillis();
+
+        // Stage 1: Swap slot 8 → offhand
+        if (now - lastSwap >= swapDelay) {
+            swapSlot8ToOffhand();
+            lastRefill = now;
+            lastSwap = now;
+        }
+
+        // Stage 2: Refill slot 8 từ inventory
+        if (lastRefill > 0 && now - lastRefill >= refillDelay) {
+            mc.setScreen(new InventoryScreen(mc.player));
+            inventoryOpen = true;
             refillSlot8();
-            // Auto ESC nếu bật
-            if (autoEsc.getValue()) mc.setScreen(null);
+            lastRefill = now;
+        }
+
+        // Stage 3: Auto ESC
+        if (inventoryOpen && autoEsc.getValue() && now - lastRefill >= escDelay) {
+            mc.setScreen(null);
             inventoryOpen = false;
-            stage = 0;
-            lastAction = System.currentTimeMillis();
+            totemPopDetected = false; // reset để lặp lại
         }
     }
 
@@ -101,30 +117,26 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     private void swapSlot8ToOffhand() {
         MinecraftClient mc = MinecraftClient.getInstance();
         PlayerInventory inv = mc.player.getInventory();
-        if (inv.getStack(8).isEmpty()) return; // không có totem trong slot 8
+        if (inv.getStack(8).isEmpty()) return;
         int syncId = mc.player.currentScreenHandler.syncId;
-        // Swap slot 8 → offhand (slot 45)
         mc.interactionManager.clickSlot(syncId, 45, 8, SlotActionType.SWAP, mc.player);
     }
 
     private void refillSlot8() {
         MinecraftClient mc = MinecraftClient.getInstance();
         PlayerInventory inv = mc.player.getInventory();
-        if (!inv.getStack(8).isEmpty()) return; // slot 8 đã có totem
-        int totemSlot = findTotemInInventory();
-        if (totemSlot == -1) return; // không có totem backup
+        if (!inv.getStack(8).isEmpty()) return;
+        int backupSlot = findTotemInInventory();
+        if (backupSlot == -1) return;
         int syncId = mc.player.currentScreenHandler.syncId;
-        // Move totem từ kho → slot 8
-        mc.interactionManager.clickSlot(syncId, totemSlot, 0, SlotActionType.PICKUP, mc.player);
+        mc.interactionManager.clickSlot(syncId, backupSlot, 0, SlotActionType.PICKUP, mc.player);
         mc.interactionManager.clickSlot(syncId, 8, 0, SlotActionType.PICKUP, mc.player);
     }
 
     private int findTotemInInventory() {
         PlayerInventory inv = MinecraftClient.getInstance().player.getInventory();
         for (int i = 9; i < 36; i++) {
-            if (inv.getStack(i).getItem() == Items.TOTEM_OF_UNDYING) {
-                return i;
-            }
+            if (inv.getStack(i).getItem() == Items.TOTEM_OF_UNDYING) return i;
         }
         return -1;
     }
