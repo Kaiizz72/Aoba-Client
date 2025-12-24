@@ -12,9 +12,11 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.InventoryScreen;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.Items;
+import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket; // Gói tin chọn slot
 import net.minecraft.network.packet.s2c.play.EntityStatusS2CPacket;
 import net.minecraft.screen.slot.SlotActionType;
-import net.minecraft.text.Text;
+import org.lwjgl.glfw.GLFW; // Thư viện chuột
+import java.lang.reflect.Field; // Thư viện Reflection
 
 public class AutoTotem extends Module implements ReceivePacketListener, TickListener {
 
@@ -32,25 +34,22 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     
     private enum Step {
         NONE,
-        STEP_1_OPEN_INV,        // Mở E
-        STEP_2_PICKUP_TOTEM,    // Cầm Totem lên
-        STEP_3_PLACE_OFFHAND,   // Đặt vào tay trái
-        STEP_4_REFILL_HOTBAR,   // Bù hàng vào Hotbar
-        STEP_5_CLOSE_INV        // Đóng E
+        STEP_1_SELECT_SLOT_8,   // Cuộn sang Slot 8
+        STEP_2_OPEN_INV,        // Mở E + Giấu chuột
+        STEP_3_PICKUP_TOTEM,    // Cầm Totem lên
+        STEP_4_PLACE_OFFHAND,   // Đặt vào tay trái
+        STEP_5_REFILL_HOTBAR,   // Bù hàng vào Hotbar
+        STEP_6_CLOSE_INV        // Đóng E + Hiện chuột
     }
     private Step currentStep = Step.NONE;
 
-    // --- CẤU HÌNH ĐỘ TRỄ (Delay) ---
-    // 150ms = 3 ticks game. Đây là tốc độ "Vàng".
-    // Đủ chậm để server xử lý chuẩn xác 100%.
-    // Đủ nhanh để không bị chết.
-    // Đủ mượt để mắt bạn nhìn thấy rõ ràng từng bước, không bị loạn.
-    private final long DELAY_COMMON = 150; 
+    // Delay: 100ms là tốc độ đẹp, mượt mà chuẩn cơm mẹ nấu
+    private final long DELAY_COMMON = 100; 
 
     public AutoTotem() {
         super("AutoTotem");
         setCategory(Category.of("Combat"));
-        setDescription("Visual Stable: Mở E -> Thao tác chuẩn -> Đóng E");
+        setDescription("Cuộn Slot 8 -> Mở E (Giấu chuột) -> Refill -> Đóng E");
         addSetting(autoEsc);
     }
 
@@ -65,6 +64,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
 
     @Override
     public void onDisable() {
+        restoreCursor(); // Đảm bảo trả lại chuột khi tắt module
         Aoba.getInstance().eventManager.RemoveListener(ReceivePacketListener.class, this);
         Aoba.getInstance().eventManager.RemoveListener(TickListener.class, this);
         reset();
@@ -73,9 +73,21 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     private void reset() {
         currentStep = Step.NONE;
         isRefilling = false;
+        restoreCursor();
     }
 
-    // --- PHÁT HIỆN POP ---
+    // --- QUẢN LÝ CHUỘT ---
+    private void hideCursor() {
+        long windowHandle = mc.getWindow().getHandle();
+        GLFW.glfwSetInputMode(windowHandle, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_HIDDEN);
+    }
+
+    private void restoreCursor() {
+        long windowHandle = mc.getWindow().getHandle();
+        GLFW.glfwSetInputMode(windowHandle, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_NORMAL);
+    }
+
+    // --- LOGIC CHÍNH ---
     @Override
     public void onReceivePacket(ReceivePacketEvent event) {
         if (mc.player == null || mc.world == null) return;
@@ -85,16 +97,15 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
                 if (packet.getEntity(mc.world) == mc.player) {
                     if (!isRefilling) { 
                         isRefilling = true;
-                        currentStep = Step.STEP_1_OPEN_INV;
+                        // Bắt đầu bằng việc chọn Slot 8 trước
+                        currentStep = Step.STEP_1_SELECT_SLOT_8;
                         lastTime = System.currentTimeMillis();
-                        // Không gửi chat debug để đỡ rối mắt
                     }
                 }
             }
         }
     }
 
-    // --- XỬ LÝ ---
     @Override
     public void onTick(TickEvent.Pre event) {
         if (mc.player == null || !isRefilling) return;
@@ -102,72 +113,84 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         long now = System.currentTimeMillis();
 
         switch (currentStep) {
-            case STEP_1_OPEN_INV:
-                // Bước 1: Mở túi đồ
-                if (!(mc.currentScreen instanceof InventoryScreen)) {
-                    mc.setScreen(new InventoryScreen(mc.player));
-                }
-                
-                // Chờ GUI load xong hẳn
-                if (now - lastTime >= DELAY_COMMON) {
-                    currentStep = Step.STEP_2_PICKUP_TOTEM;
+            case STEP_1_SELECT_SLOT_8:
+                // Bước 1: Cuộn slot 8
+                if (now - lastTime >= 50) {
+                    setSlotVisual(8); // Chỉnh visual trên màn hình
+                    if (mc.getNetworkHandler() != null) {
+                        mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(8)); // Báo server
+                    }
+                    currentStep = Step.STEP_2_OPEN_INV;
                     lastTime = now;
                 }
                 break;
 
-            case STEP_2_PICKUP_TOTEM:
-                // Bước 2: Cầm Totem từ Slot 8 lên
+            case STEP_2_OPEN_INV:
+                // Bước 2: Mở túi + Giấu chuột
+                if (!(mc.currentScreen instanceof InventoryScreen)) {
+                    mc.setScreen(new InventoryScreen(mc.player));
+                }
+                hideCursor(); // Tàng hình chuột ngay
+                
+                if (now - lastTime >= DELAY_COMMON) {
+                    currentStep = Step.STEP_3_PICKUP_TOTEM;
+                    lastTime = now;
+                }
+                break;
+
+            case STEP_3_PICKUP_TOTEM:
+                // Bước 3: Cầm Totem từ Slot 8 lên
                 if (mc.currentScreen instanceof InventoryScreen) {
                     if (now - lastTime >= DELAY_COMMON) {
                         int syncId = mc.player.currentScreenHandler.syncId;
-                        // Click PICKUP vào Slot 44 (Hotbar 8)
+                        // Slot 44 = Hotbar slot 8
                         mc.interactionManager.clickSlot(syncId, 44, 0, SlotActionType.PICKUP, mc.player);
                         
-                        currentStep = Step.STEP_3_PLACE_OFFHAND;
+                        currentStep = Step.STEP_4_PLACE_OFFHAND;
                         lastTime = now;
                     }
                 } else {
-                    // Nếu lỡ tay đóng túi thì mở lại
                     mc.setScreen(new InventoryScreen(mc.player));
+                    hideCursor();
                 }
                 break;
 
-            case STEP_3_PLACE_OFFHAND:
-                // Bước 3: Đặt vào Offhand
+            case STEP_4_PLACE_OFFHAND:
+                // Bước 4: Thả vào Offhand
                 if (mc.currentScreen instanceof InventoryScreen) {
                     if (now - lastTime >= DELAY_COMMON) {
                         int syncId = mc.player.currentScreenHandler.syncId;
-                        // Click PICKUP vào Slot 45 (Offhand)
+                        // Slot 45 = Offhand
                         mc.interactionManager.clickSlot(syncId, 45, 0, SlotActionType.PICKUP, mc.player);
                         
-                        // Xong phần cứu mạng, chuyển sang phần nạp đạn
-                        currentStep = Step.STEP_4_REFILL_HOTBAR;
+                        currentStep = Step.STEP_5_REFILL_HOTBAR;
                         lastTime = now;
                     }
                 }
                 break;
 
-            case STEP_4_REFILL_HOTBAR:
-                // Bước 4: Refill lại Slot 8
+            case STEP_5_REFILL_HOTBAR:
+                // Bước 5: Bù hàng
                 if (mc.currentScreen instanceof InventoryScreen) {
                     if (now - lastTime >= DELAY_COMMON) {
                         boolean success = refillSlot8(); 
                         
                         if (autoEsc.getValue()) {
-                            currentStep = Step.STEP_5_CLOSE_INV;
+                            currentStep = Step.STEP_6_CLOSE_INV;
                         } else {
-                            reset(); // Giữ nguyên túi mở
+                            restoreCursor();
+                            reset(); 
                         }
                         lastTime = now;
                     }
                 }
                 break;
 
-            case STEP_5_CLOSE_INV:
-                // Bước 5: Đóng túi nhẹ nhàng
+            case STEP_6_CLOSE_INV:
+                // Bước 6: Đóng túi + Trả lại chuột
                 if (now - lastTime >= DELAY_COMMON) {
                     mc.setScreen(null);
-                    mc.setScreen(null); // Double check đóng
+                    restoreCursor(); 
                     reset();
                 }
                 break;
@@ -180,23 +203,37 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     @Override
     public void onTick(TickEvent.Post event) {}
 
-    // --- HELPER ---
+    // --- HELPER FIX VISUAL SLOT ---
+    private void setSlotVisual(int slotIndex) {
+        PlayerInventory inv = mc.player.getInventory();
+        boolean success = false;
+        try {
+            Field f = PlayerInventory.class.getDeclaredField("selectedSlot");
+            f.setAccessible(true);
+            f.setInt(inv, slotIndex);
+            success = true;
+        } catch (Exception ignored) {}
+
+        if (!success) {
+            try {
+                Field f = PlayerInventory.class.getDeclaredField("currentItem");
+                f.setAccessible(true);
+                f.setInt(inv, slotIndex);
+            } catch (Exception ignored) {}
+        }
+    }
 
     private boolean refillSlot8() {
         PlayerInventory inv = mc.player.getInventory();
         int sourceSlot = -1;
-        
-        // Tìm totem từ inventory chính (9 -> 35)
         for (int i = 9; i < 36; i++) {
             if (inv.getStack(i).getItem() == Items.TOTEM_OF_UNDYING) {
                 sourceSlot = i;
                 break;
             }
         }
-
         if (sourceSlot != -1) {
             int syncId = mc.player.currentScreenHandler.syncId;
-            // Dùng SWAP để ném thẳng vào slot 8 (ID 44)
             mc.interactionManager.clickSlot(syncId, sourceSlot, 8, SlotActionType.SWAP, mc.player);
             return true;
         }
