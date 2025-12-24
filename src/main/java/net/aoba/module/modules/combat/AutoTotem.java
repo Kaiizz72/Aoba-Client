@@ -25,16 +25,15 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
             .build();
 
     private long lastAction = 0;
-    private int stage = 0; // stage machine
+    private int stage = 0;
     private boolean inventoryOpen = false;
 
-    // Delay cố định human-like (ms)
-    private final long delay = 150;
+    private final long delay = 200; // human-like delay
 
     public AutoTotem() {
         super("AutoTotem");
         setCategory(Category.of("Combat"));
-        setDescription("Totem pop → swap totem vào offhand → refill slot 8 → close inventory");
+        setDescription("Totem offhand vỡ → swap slot 8 → refill slot 8 → auto ESC bật/tắt");
         addSetting(autoEsc);
     }
 
@@ -68,7 +67,9 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
 
         if (System.currentTimeMillis() - lastAction < delay) return;
 
-        // Stage 1: mở inventory GUI
+        // Stage 1: swap slot 8 → offhand
+        swapSlot8ToOffhand();
+        // Stage 2: mở inventory refill slot 8
         mc.setScreen(new InventoryScreen(mc.player));
         inventoryOpen = true;
         stage = 2;
@@ -78,66 +79,53 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     /* ===================== TICK UPDATE ===================== */
 
     @Override
-    public void onTick(TickEvent.Pre event) {
-        // Không làm gì ở Pre
-    }
+    public void onTick(TickEvent.Pre event) {}
 
     @Override
     public void onTick(TickEvent.Post event) {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null || mc.world == null) return;
 
-        if (System.currentTimeMillis() - lastAction < delay) return;
-
-        PlayerInventory inv = mc.player.getInventory();
-
-        switch (stage) {
-            case 2: // Swap totem vào offhand
-                int totemSlot = findTotemInInventory();
-                if (totemSlot != -1) {
-                    // Slot 45 = offhand, swap với inventory slot chứa totem
-                    mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, 45, totemSlot, SlotActionType.SWAP, mc.player);
-                }
-                stage = 3;
-                lastAction = System.currentTimeMillis();
-                break;
-
-            case 3: // Refill slot 8 nếu trống
-                if (inv.getStack(8).getItem() != Items.TOTEM_OF_UNDYING) {
-                    totemSlot = findTotemInInventory();
-                    if (totemSlot != -1) moveItem(totemSlot, 8);
-                }
-                stage = 4;
-                lastAction = System.currentTimeMillis();
-                break;
-
-            case 4: // Thả inventory và ESC nếu bật
-                if (inventoryOpen) {
-                    if (autoEsc.getValue()) mc.setScreen(null);
-                    inventoryOpen = false;
-                }
-                stage = 0; // reset stage
-                lastAction = System.currentTimeMillis();
-                break;
+        if (stage == 2 && System.currentTimeMillis() - lastAction >= delay && inventoryOpen) {
+            refillSlot8();
+            // Auto ESC nếu bật
+            if (autoEsc.getValue()) mc.setScreen(null);
+            inventoryOpen = false;
+            stage = 0;
+            lastAction = System.currentTimeMillis();
         }
     }
 
     /* ===================== UTILS ===================== */
 
+    private void swapSlot8ToOffhand() {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        PlayerInventory inv = mc.player.getInventory();
+        if (inv.getStack(8).isEmpty()) return; // không có totem trong slot 8
+        int syncId = mc.player.currentScreenHandler.syncId;
+        // Swap slot 8 → offhand (slot 45)
+        mc.interactionManager.clickSlot(syncId, 45, 8, SlotActionType.SWAP, mc.player);
+    }
+
+    private void refillSlot8() {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        PlayerInventory inv = mc.player.getInventory();
+        if (!inv.getStack(8).isEmpty()) return; // slot 8 đã có totem
+        int totemSlot = findTotemInInventory();
+        if (totemSlot == -1) return; // không có totem backup
+        int syncId = mc.player.currentScreenHandler.syncId;
+        // Move totem từ kho → slot 8
+        mc.interactionManager.clickSlot(syncId, totemSlot, 0, SlotActionType.PICKUP, mc.player);
+        mc.interactionManager.clickSlot(syncId, 8, 0, SlotActionType.PICKUP, mc.player);
+    }
+
     private int findTotemInInventory() {
         PlayerInventory inv = MinecraftClient.getInstance().player.getInventory();
-        for (int i = 9; i < 36; i++) { // kiểm tra kho
+        for (int i = 9; i < 36; i++) {
             if (inv.getStack(i).getItem() == Items.TOTEM_OF_UNDYING) {
                 return i;
             }
         }
         return -1;
-    }
-
-    private void moveItem(int from, int to) {
-        MinecraftClient mc = MinecraftClient.getInstance();
-        int syncId = mc.player.currentScreenHandler.syncId;
-        mc.interactionManager.clickSlot(syncId, from, 0, SlotActionType.PICKUP, mc.player);
-        mc.interactionManager.clickSlot(syncId, to, 0, SlotActionType.PICKUP, mc.player);
     }
 }
