@@ -8,7 +8,7 @@ import net.aoba.event.listeners.TickListener;
 import net.aoba.module.Category;
 import net.aoba.module.Module;
 import net.aoba.settings.types.BooleanSetting;
-import net.aoba.settings.types.IntegerSetting; // Import thanh kéo số
+import net.aoba.settings.types.IntegerSetting;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.InventoryScreen;
 import net.minecraft.entity.player.PlayerInventory;
@@ -28,14 +28,12 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
 
     // --- CÀI ĐẶT (SETTINGS) ---
     
-    // Thanh kéo tốc độ (Delay)
+    // Đã xóa .min() và .max() để sửa lỗi Build
     private final IntegerSetting delayMs = IntegerSetting.builder()
             .id("autototem_delay")
             .displayName("Tốc độ (ms)")
             .description("Thời gian nghỉ giữa các bước (Thấp = Nhanh)")
-            .defaultValue(100) // Mặc định 100ms
-            .min(0)            // Min 0ms (Siêu tốc)
-            .max(500)          // Max 500ms
+            .defaultValue(100) 
             .build();
 
     private final BooleanSetting autoEsc = BooleanSetting.builder()
@@ -50,11 +48,11 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     
     private enum Step {
         NONE,
-        STEP_1_SELECT_SLOT_8,   // Chọn Slot 8
-        STEP_2_OPEN_INV,        // Mở E
-        STEP_3_AIM_AND_SWAP_F,  // Aim chuột vào Totem + Ấn F
-        STEP_4_REFILL_HOTBAR,   // Bù hàng
-        STEP_5_CLOSE_INV        // Đóng E
+        STEP_1_SELECT_SLOT_8,
+        STEP_2_OPEN_INV,
+        STEP_3_AIM_AND_SWAP_F,
+        STEP_4_REFILL_HOTBAR,
+        STEP_5_CLOSE_INV
     }
     private Step currentStep = Step.NONE;
 
@@ -62,7 +60,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         super("AutoTotem");
         setCategory(Category.of("Combat"));
         setDescription("Mở E -> Aim chuột vào Totem -> Ấn F -> Refill");
-        addSetting(delayMs); // Thêm thanh kéo vào Menu
+        addSetting(delayMs);
         addSetting(autoEsc);
     }
 
@@ -103,7 +101,6 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
             int guiLeft = (winWidth - guiWidth) / 2;
             int guiTop = (winHeight - guiHeight) / 2;
             
-            // Random Jitter: Lệch 1 chút cho giống người thật
             int jitterX = ThreadLocalRandom.current().nextInt(-3, 4);
             int jitterY = ThreadLocalRandom.current().nextInt(-3, 4);
 
@@ -119,7 +116,6 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         } catch (Exception e) {}
     }
 
-    // --- EVENT PACKET ---
     @Override
     public void onReceivePacket(ReceivePacketEvent event) {
         if (mc.player == null || mc.world == null) return;
@@ -137,19 +133,20 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         }
     }
 
-    // --- EVENT TICK (LOGIC CHÍNH) ---
     @Override
     public void onTick(TickEvent.Pre event) {
         if (mc.player == null || !isRefilling) return;
 
         long now = System.currentTimeMillis();
-        // Lấy giá trị từ thanh kéo
-        long currentDelay = delayMs.getValue(); 
+        
+        // --- AN TOÀN: Đảm bảo delay không âm ---
+        // Vì ta đã bỏ giới hạn min/max trong Builder để fix lỗi build,
+        // ta cần xử lý nó ở đây. (Math.max(0, ...) nghĩa là không bao giờ nhỏ hơn 0)
+        long currentDelay = Math.max(0, delayMs.getValue()); 
 
         switch (currentStep) {
             case STEP_1_SELECT_SLOT_8:
-                // Bước 1: Cuộn Slot 8
-                if (now - lastTime >= 50) { // Delay tối thiểu để server nhận
+                if (now - lastTime >= 50) {
                     setSlotVisual(8);
                     if (mc.getNetworkHandler() != null) {
                         mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(8));
@@ -160,7 +157,6 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
                 break;
 
             case STEP_2_OPEN_INV:
-                // Bước 2: Mở túi
                 if (!(mc.currentScreen instanceof InventoryScreen)) {
                     mc.setScreen(new InventoryScreen(mc.player));
                 }
@@ -172,19 +168,11 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
                 break;
 
             case STEP_3_AIM_AND_SWAP_F:
-                // Bước 3: Aim vào Totem + Ấn F
                 if (mc.currentScreen instanceof InventoryScreen) {
                     if (now - lastTime >= currentDelay) {
                         int syncId = mc.player.currentScreenHandler.syncId;
-                        
-                        // 1. Aim chuột vào Slot 44 (Totem)
                         aimAtSlot(44);
-                        
-                        // 2. Thực hiện lệnh SWAP (F)
-                        // Button 40 trong lệnh SWAP có nghĩa là "Swap với Offhand"
-                        // Đây chính là hành động đưa chuột vào đồ rồi ấn F
                         mc.interactionManager.clickSlot(syncId, 44, 40, SlotActionType.SWAP, mc.player);
-                        
                         currentStep = Step.STEP_4_REFILL_HOTBAR;
                         lastTime = now;
                     }
@@ -192,10 +180,8 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
                 break;
 
             case STEP_4_REFILL_HOTBAR:
-                // Bước 4: Refill (Vì Slot 8 giờ đang chứa cái khiên/đồ cũ của tay trái)
                 if (mc.currentScreen instanceof InventoryScreen) {
                     if (now - lastTime >= currentDelay) {
-                        // Aim chuột vào kho cho ngầu (Optional)
                         int totemSlot = findTotemSlot();
                         if (totemSlot != -1) aimAtSlot(totemSlot);
 
@@ -212,7 +198,6 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
                 break;
 
             case STEP_5_CLOSE_INV:
-                // Bước 5: Đóng túi
                 if (now - lastTime >= currentDelay) {
                     mc.setScreen(null);
                     reset();
