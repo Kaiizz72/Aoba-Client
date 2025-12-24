@@ -1,5 +1,5 @@
 /*
- * Aoba Hacked Client
+ * Aoba Hacked Clientt
  * Copyright (C) 2019-2024 coltonk9043
  *
  * Licensed under the GNU General Public License, Version 3 or later.
