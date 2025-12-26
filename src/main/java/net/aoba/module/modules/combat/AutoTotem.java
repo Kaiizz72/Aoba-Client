@@ -20,6 +20,7 @@ import net.minecraft.item.Items;
 import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
 import net.minecraft.network.packet.s2c.play.EntityStatusS2CPacket;
+import net.minecraft.screen.slot.Slot; // ĐÃ THÊM IMPORT THIẾU
 import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
@@ -33,7 +34,7 @@ import org.lwjgl.glfw.GLFW;
 
 import java.lang.reflect.Field;
 import java.util.List;
-import java.util.concurrent.ThreadLocalRandom; // Đã thêm import thiếu
+import java.util.concurrent.ThreadLocalRandom;
 
 public class AutoTotem extends Module implements ReceivePacketListener, TickListener {
 
@@ -100,7 +101,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     public AutoTotem() {
         super("AutoTotem");
         setCategory(Category.of("Combat"));
-        setDescription("PvP V18: Fixed for 1.21.2+");
+        setDescription("PvP V19: Final Fix Import Slot");
 
         addSetting(totemEnable); addSetting(totemDelay); addSetting(autoEsc);
         addSetting(anchorEnable); addSetting(anchorDelay);
@@ -296,7 +297,6 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
         float pitch = (float) (-Math.toDegrees(Math.atan2(dy, dist)));
         mc.player.setYaw(yaw); mc.player.setPitch(pitch);
-        // FIX: Thêm tham số boolean thứ 4 (horizontalCollision) cho bản 1.21.2+
         mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch, mc.player.isOnGround(), mc.player.horizontalCollision));
     }
 
@@ -308,7 +308,6 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
         float pitch = (float) (-Math.toDegrees(Math.atan2(dy, dist)));
         mc.player.setYaw(yaw); mc.player.setPitch(pitch);
-        // FIX: Thêm tham số boolean thứ 4
         mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch, mc.player.isOnGround(), mc.player.horizontalCollision));
     }
 
