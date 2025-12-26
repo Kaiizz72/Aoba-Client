@@ -14,7 +14,7 @@ import java.io.IOException;
 
 public class CmdDiscord extends Command
 {
-    private static final String DISCORD_URL = "https://discord.gg/jEu6WfnyR6";
+    private static final String DISCORD_URL = "https://discord.gg/QnQNPsB3h3";
 
     public CmdDiscord()
     {
