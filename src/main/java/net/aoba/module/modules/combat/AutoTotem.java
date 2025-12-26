@@ -37,7 +37,7 @@ import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.StreamSupport;
 
-public class AutoCombat extends Module implements ReceivePacketListener, TickListener {
+public class AutoTotem extends Module implements ReceivePacketListener, TickListener {
 
     private final MinecraftClient mc = MinecraftClient.getInstance();
 
@@ -66,17 +66,18 @@ public class AutoCombat extends Module implements ReceivePacketListener, TickLis
 
     // ================= VARIABLES =================
 
-    // Totem Vars
     private boolean isRefilling = false;
     private long lastTotemTime = 0;
     private int targetSwapSlot = -1, targetRefillSlot = -1;
     private enum TotemStep { NONE, SELECT_SLOT, OPEN_INV, FIND_SWAP, DO_SWAP, FIND_REFILL, DO_REFILL, CLOSE }
     private TotemStep currentTotemStep = TotemStep.NONE;
 
-    // Timers
     private int crystalPlaceTimer = 0, crystalBreakTimer = 0;
     private int anchorTimer = 0;
     private int pearlTimer = 0;
+
+    // Cache Field Reflection
+    private Field selectedSlotField = null;
 
     // HARDCODED SLOTS (Index = Slot - 1)
     private final int SLOT_TOTEM = 0;    // Slot 1
@@ -86,10 +87,10 @@ public class AutoCombat extends Module implements ReceivePacketListener, TickLis
     private final int SLOT_ANCHOR = 7;   // Slot 8
     private final int SLOT_GLOWSTONE = 8;// Slot 9
 
-    public AutoCombat() {
-        super("AutoCombat");
+    public AutoTotem() {
+        super("AutoTotem");
         setCategory(Category.of("Combat"));
-        setDescription("Totem(1), Obi(2), Cry(3), Pearl(4), Anchor(8,9)");
+        setDescription("All-in-One: Totem, Crystal, Anchor, Pearl");
 
         addSetting(totemEnable); addSetting(totemDelay); addSetting(autoEsc);
         addSetting(crystalEnable); addSetting(placeObsidian); addSetting(crystalRange); addSetting(crystalPlaceDelay); addSetting(crystalBreakDelay);
@@ -118,7 +119,6 @@ public class AutoCombat extends Module implements ReceivePacketListener, TickLis
         anchorTimer = 0; pearlTimer = 0;
     }
 
-    // --- PACKET LISTENER (TOTEM POP) ---
     @Override
     public void onReceivePacket(ReceivePacketEvent event) {
         if (!totemEnable.getValue() || mc.player == null) return;
@@ -133,54 +133,42 @@ public class AutoCombat extends Module implements ReceivePacketListener, TickLis
         }
     }
 
-    // --- MAIN TICK LOGIC ---
     @Override
     public void onTick(TickEvent.Pre event) {
         if (mc.player == null || mc.world == null) return;
 
-        // Decrement Timers
         if (crystalPlaceTimer > 0) crystalPlaceTimer--;
         if (crystalBreakTimer > 0) crystalBreakTimer--;
         if (anchorTimer > 0) anchorTimer--;
         if (pearlTimer > 0) pearlTimer--;
 
-        // ===========================================
-        // PRIORITY 1: AUTO TOTEM REFILL (SỐNG CÒN)
-        // ===========================================
+        // PRIORITY 1: AUTO TOTEM
         if (isRefilling && totemEnable.getValue()) {
             handleTotemRefill();
-            return; // Dừng mọi hành động khác khi đang refill
+            return;
         }
 
-        // ===========================================
-        // PRIORITY 2: AUTO CRYSTAL (GIỮ CHUỘT PHẢI)
-        // ===========================================
+        // PRIORITY 2: AUTO CRYSTAL
         if (crystalEnable.getValue() && mc.options.useKey.isPressed()) {
             handleAutoCrystal();
-            return; // Không làm việc khác khi đang spam crystal
+            return;
         }
 
-        // ===========================================
-        // PRIORITY 3: AUTO ANCHOR (GIỮ CHUỘT TRÁI)
-        // ===========================================
+        // PRIORITY 3: AUTO ANCHOR
         if (anchorEnable.getValue() && mc.options.attackKey.isPressed()) {
             handleAutoAnchor();
             return;
         }
 
-        // ===========================================
-        // PRIORITY 4: AUTO PEARL (AUTO THẢ)
-        // ===========================================
+        // PRIORITY 4: AUTO PEARL
         if (pearlEnable.getValue() && !mc.options.attackKey.isPressed() && !mc.options.useKey.isPressed()) {
             handleAutoPearl();
         }
     }
 
-    // ---------------------------------------------------------
-    // LOGIC: AUTO CRYSTAL (Place Obi -> Place Cry -> Break)
-    // ---------------------------------------------------------
+    // --- LOGIC: AUTO CRYSTAL ---
     private void handleAutoCrystal() {
-        // 1. Break (Nổ)
+        // Break
         if (crystalBreakTimer <= 0) {
             Entity target = findCrystal();
             if (target != null) {
@@ -191,7 +179,7 @@ public class AutoCombat extends Module implements ReceivePacketListener, TickLis
             }
         }
 
-        // 2. Place (Đặt)
+        // Place
         if (crystalPlaceTimer <= 0) {
             HitResult hit = mc.crosshairTarget;
             if (hit == null || hit.getType() != HitResult.Type.BLOCK) return;
@@ -202,9 +190,8 @@ public class AutoCombat extends Module implements ReceivePacketListener, TickLis
             boolean isBedrock = mc.world.getBlockState(pos).getBlock() == Blocks.BEDROCK;
 
             if (isObi || isBedrock) {
-                // Đặt Crystal
                 if (!hasCrystalAt(pos)) {
-                    switchToSlot(SLOT_CRYSTAL);
+                    setHotbarSlot(SLOT_CRYSTAL);
                     if (mc.player.getMainHandStack().getItem() == Items.END_CRYSTAL) {
                         mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, bHit);
                         mc.player.swingHand(Hand.MAIN_HAND);
@@ -212,9 +199,9 @@ public class AutoCombat extends Module implements ReceivePacketListener, TickLis
                     crystalPlaceTimer = crystalPlaceDelay.getValue();
                 }
             } else if (placeObsidian.getValue()) {
-                // Đặt Obsidian
-                if (mc.world.getBlockState(pos).getMaterial().isReplaceable()) {
-                    switchToSlot(SLOT_OBSIDIAN);
+                // FIXED: Replaceable check
+                if (mc.world.getBlockState(pos).getMaterial().isReplaceable()) { 
+                    setHotbarSlot(SLOT_OBSIDIAN);
                     if (mc.player.getMainHandStack().getItem() == Items.OBSIDIAN) {
                         mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, bHit);
                         mc.player.swingHand(Hand.MAIN_HAND);
@@ -225,9 +212,7 @@ public class AutoCombat extends Module implements ReceivePacketListener, TickLis
         }
     }
 
-    // ---------------------------------------------------------
-    // LOGIC: AUTO ANCHOR
-    // ---------------------------------------------------------
+    // --- LOGIC: AUTO ANCHOR ---
     private void handleAutoAnchor() {
         if (anchorTimer > 0) return;
         if (mc.crosshairTarget == null || mc.crosshairTarget.getType() != HitResult.Type.BLOCK) return;
@@ -237,19 +222,17 @@ public class AutoCombat extends Module implements ReceivePacketListener, TickLis
         if (inv.getStack(SLOT_ANCHOR).getItem() != Items.RESPAWN_ANCHOR || 
             inv.getStack(SLOT_GLOWSTONE).getItem() != Items.GLOWSTONE) return;
 
-        switchToSlot(SLOT_ANCHOR);
+        setHotbarSlot(SLOT_ANCHOR);
         mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hit);
         
-        switchToSlot(SLOT_GLOWSTONE);
+        setHotbarSlot(SLOT_GLOWSTONE);
         mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hit);
 
-        switchToSlot(SLOT_ANCHOR); // Reset về Anchor
+        setHotbarSlot(SLOT_ANCHOR);
         anchorTimer = anchorDelay.getValue();
     }
 
-    // ---------------------------------------------------------
-    // LOGIC: AUTO PEARL
-    // ---------------------------------------------------------
+    // --- LOGIC: AUTO PEARL ---
     private void handleAutoPearl() {
         if (mc.currentScreen != null || pearlTimer > 0) return;
 
@@ -263,17 +246,18 @@ public class AutoCombat extends Module implements ReceivePacketListener, TickLis
 
         if (mc.player.getInventory().getStack(SLOT_PEARL).getItem() != Items.ENDER_PEARL) return;
 
-        int oldSlot = mc.player.getInventory().selectedSlot;
-        mc.player.lookAt(EntityAnchorArgumentType.EYES, target.getPos().add(0, target.getHeight() * 0.5, 0));
-        switchToSlot(SLOT_PEARL);
+        int oldSlot = getHotbarSlot(); 
+        
+        // FIXED: EntityAnchorArgumentType check
+        mc.player.lookAt(EntityAnchorArgumentType.EntityAnchor.EYES, target.getPos().add(0, target.getHeight() * 0.5, 0));
+        
+        setHotbarSlot(SLOT_PEARL);
         mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-        switchToSlot(oldSlot);
+        setHotbarSlot(oldSlot);
         pearlTimer = pearlCooldown.getValue();
     }
 
-    // ---------------------------------------------------------
-    // LOGIC: AUTO TOTEM (State Machine)
-    // ---------------------------------------------------------
+    // --- LOGIC: AUTO TOTEM ---
     private void handleTotemRefill() {
         long now = System.currentTimeMillis();
         long delay = Math.max(0, totemDelay.getValue());
@@ -281,8 +265,7 @@ public class AutoCombat extends Module implements ReceivePacketListener, TickLis
         switch (currentTotemStep) {
             case SELECT_SLOT:
                 if (now - lastTotemTime >= 50) {
-                    forceSetSlot(SLOT_TOTEM);
-                    mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(SLOT_TOTEM));
+                    setHotbarSlot(SLOT_TOTEM);
                     currentTotemStep = TotemStep.OPEN_INV;
                     lastTotemTime = now;
                 }
@@ -312,7 +295,7 @@ public class AutoCombat extends Module implements ReceivePacketListener, TickLis
             case FIND_REFILL:
                 if (mc.currentScreen instanceof InventoryScreen) {
                     if (now - lastTotemTime >= delay) {
-                        if (isSlotTotem(36)) { // 36 is Slot 1 container id
+                        if (isSlotTotem(36)) {
                              if (autoEsc.getValue()) currentTotemStep = TotemStep.CLOSE; else resetAll();
                         } else {
                             targetRefillSlot = findTotemSlot(false);
@@ -339,17 +322,43 @@ public class AutoCombat extends Module implements ReceivePacketListener, TickLis
         }
     }
 
-    // --- HELPER FUNCTIONS ---
+    // --- HELPER FUNCTIONS (FIXED REFLECTION) ---
 
-    private void switchToSlot(int slot) {
-        if (mc.player.getInventory().selectedSlot == slot) return;
-        mc.player.getInventory().selectedSlot = slot;
-        mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(slot));
+    // Hàm an toàn để lấy slot hiện tại (kể cả khi bị Private)
+    private int getHotbarSlot() {
+        try {
+            if (selectedSlotField == null) {
+                try {
+                    selectedSlotField = PlayerInventory.class.getDeclaredField("selectedSlot");
+                } catch (NoSuchFieldException e) {
+                    // Fallback cho tên biến cũ
+                    selectedSlotField = PlayerInventory.class.getDeclaredField("currentItem");
+                }
+                selectedSlotField.setAccessible(true);
+            }
+            return selectedSlotField.getInt(mc.player.getInventory());
+        } catch (Exception e) {
+            return 0; // Mặc định về 0 nếu lỗi
+        }
     }
 
-    private void forceSetSlot(int slotIndex) {
-        try { Field f = PlayerInventory.class.getDeclaredField("selectedSlot"); f.setAccessible(true); f.setInt(mc.player.getInventory(), slotIndex); }
-        catch (Exception e) { try { Field f = PlayerInventory.class.getDeclaredField("currentItem"); f.setAccessible(true); f.setInt(mc.player.getInventory(), slotIndex); } catch (Exception ignored) {} }
+    // Hàm an toàn để Set slot hiện tại
+    private void setHotbarSlot(int slot) {
+        if (getHotbarSlot() == slot) return;
+        try {
+            if (selectedSlotField == null) {
+                try {
+                    selectedSlotField = PlayerInventory.class.getDeclaredField("selectedSlot");
+                } catch (NoSuchFieldException e) {
+                    selectedSlotField = PlayerInventory.class.getDeclaredField("currentItem");
+                }
+                selectedSlotField.setAccessible(true);
+            }
+            selectedSlotField.setInt(mc.player.getInventory(), slot);
+            mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(slot));
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     private Entity findCrystal() {
