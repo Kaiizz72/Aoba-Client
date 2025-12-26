@@ -33,6 +33,7 @@ import org.lwjgl.glfw.GLFW;
 
 import java.lang.reflect.Field;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom; // Đã thêm import thiếu
 
 public class AutoTotem extends Module implements ReceivePacketListener, TickListener {
 
@@ -56,15 +57,14 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     private final BooleanSetting pearlEnable = BooleanSetting.builder().id("pearl_enable").displayName("4. Bật Auto Pearl (Key C)").defaultValue(true).build();
 
     // ================= [FIXED SLOTS CONFIG] =================
-    // Lưu ý: Code đếm từ 0. Game đếm từ 1.
     
     // 1. Crystal Combo
     private final int SLOT_OBSIDIAN = 1;   // Game Slot 2
     private final int SLOT_CRYSTAL = 2;    // Game Slot 3
     
     // 2. Pearl
-    private final int SLOT_PEARL = 3;      // Game Slot 4 (THEO YÊU CẦU MỚI)
-
+    private final int SLOT_PEARL = 3;      // Game Slot 4
+    
     // 3. Anchor Combo
     private final int SLOT_ANCHOR = 6;     // Game Slot 7
     private final int SLOT_GLOWSTONE = 7;  // Game Slot 8
@@ -100,7 +100,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     public AutoTotem() {
         super("AutoTotem");
         setCategory(Category.of("Combat"));
-        setDescription("PvP V17: Pearl Slot 4 (Key C)");
+        setDescription("PvP V18: Fixed for 1.21.2+");
 
         addSetting(totemEnable); addSetting(totemDelay); addSetting(autoEsc);
         addSetting(anchorEnable); addSetting(anchorDelay);
@@ -176,7 +176,6 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         // 3. PEARL (KEY C)
         if (pearlEnable.getValue()) {
             boolean isC = GLFW.glfwGetKey(window, GLFW.GLFW_KEY_C) == GLFW.GLFW_PRESS;
-            // Kích hoạt khi bấm nút C
             if (isC && !lastKeyC && pearlTimer == 0) {
                 handleFastPearl();
             }
@@ -184,37 +183,24 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         }
     }
 
-    // ================= [PEARL LOGIC - SLOT 4] =================
     private void handleFastPearl() {
-        // Lưu slot hiện tại để quay về sau khi ném
         int oldSlot = getHotbarSlot();
-        
-        // Kiểm tra Slot 4 (Index 3) có Pearl không
         if (mc.player.getInventory().getStack(SLOT_PEARL).getItem() != Items.ENDER_PEARL) {
             sendInfo("Slot 4 không có Pearl!");
             return;
         }
-
-        // 1. Chuyển sang Slot 4
         setHotbarSlot(SLOT_PEARL);
-        
-        // 2. Sử dụng vật phẩm (Ném)
         mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-        
-        // 3. Quay về slot cũ
         setHotbarSlot(oldSlot);
-        
-        // Cooldown nhẹ để không spam
         pearlTimer = 10;
     }
 
-    // ================= [CRYSTAL LOOP] =================
     private void processCrystalLoop() {
         isCrystalActive = true;
         if (crystalWaitTimer > 0) { crystalWaitTimer--; return; }
 
         switch (crystalStage) {
-            case 0: // Check & Đặt Obsidian (Slot 2)
+            case 0: 
                 if (mc.crosshairTarget == null || mc.crosshairTarget.getType() != HitResult.Type.BLOCK) return;
                 BlockHitResult hit = (BlockHitResult) mc.crosshairTarget;
                 BlockPos targetBlock = hit.getBlockPos();
@@ -234,7 +220,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
                 crystalStage = 1; 
                 break;
 
-            case 1: // Đặt Crystal (Slot 3)
+            case 1: 
                 if (targetObiPos != null) {
                     setHotbarSlot(SLOT_CRYSTAL);
                     forceLookAt(targetObiPos); 
@@ -247,7 +233,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
                 } else { crystalStage = 0; }
                 break;
                 
-            case 2: // Đập Nổ
+            case 2: 
                 if (targetObiPos != null) {
                     List<EndCrystalEntity> crystals = mc.world.getEntitiesByClass(EndCrystalEntity.class, new Box(targetObiPos.up()), e -> true);
                     if (!crystals.isEmpty()) {
@@ -263,7 +249,6 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         }
     }
 
-    // ================= [ANCHOR LOOP] =================
     private void processAnchorLoop() {
         if (anchorStage == 0 && (mc.crosshairTarget == null || mc.crosshairTarget.getType() != HitResult.Type.BLOCK)) return;
         if (waitTimer > 0) { waitTimer--; return; }
@@ -301,7 +286,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         }
     }
 
-    // ================= [HELPERS] =================
+    // ================= [AIM SYSTEM FIXED FOR 1.21.2+] =================
     
     private void forceLookAt(BlockPos pos) {
         Vec3d eyes = mc.player.getEyePos();
@@ -311,7 +296,8 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
         float pitch = (float) (-Math.toDegrees(Math.atan2(dy, dist)));
         mc.player.setYaw(yaw); mc.player.setPitch(pitch);
-        mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch, mc.player.isOnGround()));
+        // FIX: Thêm tham số boolean thứ 4 (horizontalCollision) cho bản 1.21.2+
+        mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch, mc.player.isOnGround(), mc.player.horizontalCollision));
     }
 
     private void forceLookAtEntity(Entity entity) {
@@ -322,7 +308,8 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
         float pitch = (float) (-Math.toDegrees(Math.atan2(dy, dist)));
         mc.player.setYaw(yaw); mc.player.setPitch(pitch);
-        mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch, mc.player.isOnGround()));
+        // FIX: Thêm tham số boolean thứ 4
+        mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch, mc.player.isOnGround(), mc.player.horizontalCollision));
     }
 
     private void handleTotemRefill() {
