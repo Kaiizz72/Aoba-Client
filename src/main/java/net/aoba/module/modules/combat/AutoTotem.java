@@ -49,29 +49,30 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     private final IntegerSetting anchorDelay = IntegerSetting.builder().id("anchor_delay").displayName("Delay Anchor (Tick)").defaultValue(1).build();
 
     private final BooleanSetting crystalEnable = BooleanSetting.builder().id("crystal_enable").displayName("3. Auto Crystal (Right Click)").defaultValue(true).build();
-    private final IntegerSetting crystalSpeed = IntegerSetting.builder().id("crystal_speed").displayName("Delay Crystal (Tick)").defaultValue(3).build(); // Tốc độ vừa phải
+    private final IntegerSetting crystalSpeed = IntegerSetting.builder().id("crystal_speed").displayName("Delay Crystal (Tick)").defaultValue(3).build();
 
     private final BooleanSetting pearlEnable = BooleanSetting.builder().id("pearl_enable").displayName("4. Bật Auto Pearl (Key C)").defaultValue(true).build();
 
     // ================= [FIXED SLOTS CONFIG] =================
     
     // 1. Crystal Combo
-    private final int SLOT_OBSIDIAN = 1;   // Game Slot 2 (Index 1)
-    private final int SLOT_CRYSTAL = 2;    // Game Slot 3 (Index 2)
+    private final int SLOT_OBSIDIAN = 1;   // Game Slot 2
+    private final int SLOT_CRYSTAL = 2;    // Game Slot 3
     
     // 2. Pearl
-    private final int SLOT_PEARL = 3;      // Game Slot 4 (Index 3)
+    private final int SLOT_PEARL = 3;      // Game Slot 4
     
     // 3. Anchor Combo
     private final int SLOT_ANCHOR = 6;     // Game Slot 7
     private final int SLOT_GLOWSTONE = 7;  // Game Slot 8
     
     // 4. Totem
-    private final int SLOT_TOTEM = 8;      // Game Slot 9
+    private final int SLOT_TOTEM = 8;      // Game Slot 9 (Index 8)
 
     // ================= VARIABLES =================
 
     private boolean isRefilling = false;
+    private boolean forceTotemSlot = false; 
     private long lastTotemTime = 0;
     private int targetSwapSlot = -1, targetRefillSlot = -1;
     private enum TotemStep { NONE, OPEN_INV, FIND_SWAP, DO_SWAP, FIND_REFILL, DO_REFILL, CLOSE }
@@ -83,7 +84,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     private int anchorStage = 0;
     private int waitTimer = 0;
     private BlockPos currentAnchorPos = null;
-
+    
     // Crystal Variables
     private boolean isCrystalActive = false;
     private int crystalStage = 0;
@@ -96,7 +97,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     public AutoTotem() {
         super("AutoTotem");
         setCategory(Category.of("Combat"));
-        setDescription("PvP V24: Smooth Crystal & Anchor");
+        setDescription("PvP V28: Crystal Aim Fix");
 
         addSetting(totemEnable); addSetting(totemDelay); addSetting(autoEsc);
         addSetting(anchorEnable); addSetting(anchorDelay);
@@ -117,8 +118,8 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     }
 
     private void resetAll() {
-        currentTotemStep = TotemStep.NONE; isRefilling = false; pearlTimer = 0; 
-        anchorStage = 0; currentAnchorPos = null; waitTimer = 0;
+        currentTotemStep = TotemStep.NONE; isRefilling = false; forceTotemSlot = false;
+        pearlTimer = 0; anchorStage = 0; currentAnchorPos = null; waitTimer = 0;
         isCrystalActive = false; crystalStage = 0; targetObiPos = null; crystalWaitTimer = 0;
     }
 
@@ -126,93 +127,86 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         if (!totemEnable.getValue() || mc.player == null) return;
         if (event.GetPacket() instanceof EntityStatusS2CPacket packet) {
             if (packet.getStatus() == 35 && packet.getEntity(mc.world) == mc.player) {
-                mc.execute(() -> { setHotbarSlot(SLOT_TOTEM); });
-                if (!isRefilling) { isRefilling = true; currentTotemStep = TotemStep.OPEN_INV; lastTotemTime = System.currentTimeMillis(); }
+                forceTotemSlot = true; 
             }
         }
     }
 
     @Override public void onTick(TickEvent.Pre event) {
         if (mc.player == null || mc.world == null || mc.player.isDead()) { resetAll(); return; }
-        if (pearlTimer > 0) pearlTimer--;
-
+        
+        // --- PRIORITY: TOTEM ---
+        if (forceTotemSlot) {
+            setHotbarSlot(SLOT_TOTEM);
+            forceTotemSlot = false; isRefilling = true; currentTotemStep = TotemStep.OPEN_INV; lastTotemTime = System.currentTimeMillis();
+            return; 
+        }
         if (isRefilling && totemEnable.getValue()) { handleTotemRefill(); return; }
 
+        if (pearlTimer > 0) pearlTimer--;
         long window = mc.getWindow().getHandle();
         
         // --- ANCHOR LOOP (LEFT CLICK) ---
         if (anchorEnable.getValue()) {
             boolean isLeftHeld = GLFW.glfwGetMouseButton(window, GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_PRESS;
-            if (!isLeftHeld) {
-                if (anchorStage != 0) { anchorStage = 0; waitTimer = 0; currentAnchorPos = null; }
-            } else {
-                processAnchorLoop();
-            }
+            if (isLeftHeld) processAnchorLoop();
+            else if (anchorStage != 0) { anchorStage = 0; waitTimer = 0; currentAnchorPos = null; }
         }
 
         // --- CRYSTAL LOOP (RIGHT CLICK) ---
         if (crystalEnable.getValue()) {
             boolean isRightHeld = GLFW.glfwGetMouseButton(window, GLFW.GLFW_MOUSE_BUTTON_RIGHT) == GLFW.GLFW_PRESS;
-            
-            if (!isRightHeld) {
-                if (isCrystalActive) { isCrystalActive = false; crystalStage = 0; crystalWaitTimer = 0; targetObiPos = null; }
-            } else {
+            if (isRightHeld) {
                 processCrystalLoop();
+            } else {
+                if (isCrystalActive) { isCrystalActive = false; crystalStage = 0; crystalWaitTimer = 0; targetObiPos = null; }
             }
         }
 
         // --- PEARL (KEY C) ---
         if (pearlEnable.getValue()) {
             boolean isC = GLFW.glfwGetKey(window, GLFW.GLFW_KEY_C) == GLFW.GLFW_PRESS;
-            if (isC && !lastKeyC && pearlTimer == 0) {
-                handleFastPearl();
-            }
+            if (isC && !lastKeyC && pearlTimer == 0) handleFastPearl();
             lastKeyC = isC;
         }
     }
 
-    // ================= [CRYSTAL LOOP - V24 FIXED] =================
+    // ================= [CRYSTAL FIX V28 - AIM VÀO OBSIDIAN] =================
     private void processCrystalLoop() {
         isCrystalActive = true;
-
-        // Bước 0: Luôn luôn chuyển về Slot 2 (Obsidian) trước tiên nếu vừa bắt đầu
-        if (crystalStage == 0) {
-            setHotbarSlot(SLOT_OBSIDIAN);
-        }
+        
+        if (crystalStage == 0) setHotbarSlot(SLOT_OBSIDIAN); // Ép về Slot 2 ngay
 
         if (crystalWaitTimer > 0) { crystalWaitTimer--; return; }
 
         switch (crystalStage) {
-            case 0: // TÌM CHỖ HOẶC ĐẶT OBSIDIAN
+            case 0: // GIAI ĐOẠN 1: ĐẶT OBSIDIAN
                 if (mc.crosshairTarget == null || mc.crosshairTarget.getType() != HitResult.Type.BLOCK) return;
                 BlockHitResult hit = (BlockHitResult) mc.crosshairTarget;
                 BlockPos targetBlock = hit.getBlockPos();
                 
-                // Kiểm tra xem đang nhìn vào cái gì
                 boolean isObiOrBedrock = mc.world.getBlockState(targetBlock).getBlock() == Blocks.OBSIDIAN || mc.world.getBlockState(targetBlock).getBlock() == Blocks.BEDROCK;
 
                 if (isObiOrBedrock) {
-                    // Nếu đã nhìn vào Obsidian rồi -> Bỏ qua bước đặt, chuyển sang đặt Crystal luôn
-                    targetObiPos = targetBlock;
-                    crystalStage = 1;
-                    crystalWaitTimer = 0; // Chuyển ngay lập tức
+                    targetObiPos = targetBlock; 
+                    crystalStage = 1; 
+                    crystalWaitTimer = 0;
                 } else {
-                    // Nếu chưa có Obsidian -> Đặt Obsidian
                     if (mc.player.getMainHandStack().getItem() != Items.OBSIDIAN) return;
-
-                    mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hit);
+                    mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hit); 
                     mc.player.swingHand(Hand.MAIN_HAND);
-                    
-                    targetObiPos = targetBlock.offset(hit.getSide()); // Vị trí obsidian mới đặt
-                    crystalWaitTimer = crystalSpeed.getValue(); // Delay chờ block hiện ra
+                    targetObiPos = targetBlock.offset(hit.getSide()); 
+                    crystalWaitTimer = crystalSpeed.getValue(); 
                     crystalStage = 1; 
                 }
                 break;
 
-            case 1: // CHUYỂN SLOT 3 VÀ ĐẶT CRYSTAL
+            case 1: // GIAI ĐOẠN 2: CHUYỂN SLOT 3 & ĐẶT CRYSTAL
                 if (targetObiPos != null) {
-                    setHotbarSlot(SLOT_CRYSTAL); // Chuyển sang Slot 3 (Index 2)
-                    forceLookAt(targetObiPos);   // Aim vào Obsidian
+                    setHotbarSlot(SLOT_CRYSTAL); 
+                    
+                    // Aim vào mặt trên của Obsidian (nơi đặt crystal)
+                    forceLookAtBlockTop(targetObiPos);
                     
                     if (mc.player.getMainHandStack().getItem() != Items.END_CRYSTAL) { 
                         crystalWaitTimer = 1; 
@@ -220,84 +214,66 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
                     }
                     
                     BlockHitResult placeHit = new BlockHitResult(new Vec3d(targetObiPos.getX()+0.5, targetObiPos.getY()+1.0, targetObiPos.getZ()+0.5), Direction.UP, targetObiPos, false);
-                    mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, placeHit);
+                    mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, placeHit); 
                     mc.player.swingHand(Hand.MAIN_HAND);
                     
-                    crystalWaitTimer = crystalSpeed.getValue(); // Delay tốc độ vừa phải
+                    crystalWaitTimer = crystalSpeed.getValue(); 
                     crystalStage = 2;
                 } else { crystalStage = 0; }
                 break;
 
-            case 2: // ĐẬP NỔ
+            case 2: // GIAI ĐOẠN 3: ĐẬP NỔ (FIX AIM VÀO OBSIDIAN)
                 if (targetObiPos != null) {
+                    // [FIX] Tiếp tục Aim vào Obsidian (Chân Crystal) thay vì Entity
+                    forceLookAtBlockTop(targetObiPos);
+
+                    // Tìm Crystal ở vị trí đó
                     List<EndCrystalEntity> crystals = mc.world.getEntitiesByClass(EndCrystalEntity.class, new Box(targetObiPos.up()), e -> true);
+                    
                     if (!crystals.isEmpty()) {
-                        EndCrystalEntity crystal = crystals.get(0);
-                        forceLookAtEntity(crystal);
-                        mc.interactionManager.attackEntity(mc.player, crystal);
+                        // Tấn công con Crystal nhưng mắt vẫn nhìn vào block ở dưới
+                        mc.interactionManager.attackEntity(mc.player, crystals.get(0));
                         mc.player.swingHand(Hand.MAIN_HAND);
                     }
                 }
-                crystalWaitTimer = crystalSpeed.getValue(); // Delay trước khi lặp lại vòng mới
+                crystalWaitTimer = crystalSpeed.getValue(); 
                 crystalStage = 0;
                 break;
         }
     }
 
-    // ================= [PEARL LOGIC] =================
-    private void handleFastPearl() {
-        if (mc.player.getInventory().getStack(SLOT_PEARL).getItem() != Items.ENDER_PEARL) {
-            sendInfo("Slot 4 không có Pearl!"); pearlTimer = 20; return;
-        }
-        setHotbarSlot(SLOT_PEARL);
-        mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-        mc.player.swingHand(Hand.MAIN_HAND);
-        pearlTimer = 10;
-    }
-
-    // ================= [ANCHOR COMBO LOGIC] =================
+    // ================= [ANCHOR LOOP] =================
     private void processAnchorLoop() {
-        if (anchorStage == 0) { setHotbarSlot(SLOT_ANCHOR); }
         if (waitTimer > 0) { waitTimer--; return; }
-
         switch (anchorStage) {
             case 0: 
+                setHotbarSlot(SLOT_ANCHOR);
                 if (mc.crosshairTarget == null || mc.crosshairTarget.getType() != HitResult.Type.BLOCK) return;
-                if (mc.player.getMainHandStack().getItem() != Items.RESPAWN_ANCHOR) return;
                 BlockHitResult hit = (BlockHitResult) mc.crosshairTarget;
-                mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hit);
-                mc.player.swingHand(Hand.MAIN_HAND);
+                if (mc.player.getMainHandStack().getItem() != Items.RESPAWN_ANCHOR) return;
+                mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hit); mc.player.swingHand(Hand.MAIN_HAND);
                 currentAnchorPos = hit.getBlockPos().offset(hit.getSide());
-                waitTimer = anchorDelay.getValue(); 
-                anchorStage = 1; 
-                break;
+                waitTimer = 0; anchorStage = 1; break;
             case 1: 
-                if (currentAnchorPos != null) {
-                    setHotbarSlot(SLOT_GLOWSTONE);
-                    forceLookAt(currentAnchorPos);
-                    waitTimer = 0; 
-                    anchorStage = 2;
-                } else { anchorStage = 0; }
-                break;
+                if (currentAnchorPos != null) { forceLookAtBlockTop(currentAnchorPos); setHotbarSlot(SLOT_GLOWSTONE); waitTimer = 0; anchorStage = 2; } else anchorStage = 0; break;
             case 2: 
                 if (currentAnchorPos != null) {
-                    forceLookAt(currentAnchorPos);
+                    forceLookAtBlockTop(currentAnchorPos);
                     if (mc.player.getMainHandStack().getItem() != Items.GLOWSTONE) { setHotbarSlot(SLOT_GLOWSTONE); waitTimer = 1; return; }
                     BlockHitResult aimHit = new BlockHitResult(new Vec3d(currentAnchorPos.getX()+0.5, currentAnchorPos.getY()+1.0, currentAnchorPos.getZ()+0.5), Direction.UP, currentAnchorPos, false);
                     mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, aimHit); mc.player.swingHand(Hand.MAIN_HAND);
                     mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, aimHit); mc.player.swingHand(Hand.MAIN_HAND);
                 }
-                waitTimer = anchorDelay.getValue();
-                anchorStage = 0; 
-                break;
+                waitTimer = anchorDelay.getValue(); anchorStage = 0; break;
         }
     }
 
-    // ================= [TOTEM REFILL LOGIC] =================
+    // ================= [HANDLERS] =================
     private void handleTotemRefill() {
+        if (currentTotemStep == TotemStep.OPEN_INV) setHotbarSlot(SLOT_TOTEM);
         long now = System.currentTimeMillis(); long delay = Math.max(0, totemDelay.getValue()); int totemIdx = SLOT_TOTEM;
         switch (currentTotemStep) {
-            case OPEN_INV: setHotbarSlot(totemIdx); if (!(mc.currentScreen instanceof InventoryScreen)) mc.setScreen(new InventoryScreen(mc.player)); if (now - lastTotemTime >= delay) { currentTotemStep = TotemStep.FIND_SWAP; lastTotemTime = now; } break;
+            case OPEN_INV: if (!(mc.currentScreen instanceof InventoryScreen)) mc.setScreen(new InventoryScreen(mc.player)); if (now - lastTotemTime >= delay) { currentTotemStep = TotemStep.FIND_SWAP; lastTotemTime = now; } break;
             case FIND_SWAP: if (mc.currentScreen instanceof InventoryScreen) { if (now - lastTotemTime >= delay) { targetSwapSlot = findTotemSlot(true); if (targetSwapSlot != -1) { aimSlot(targetSwapSlot); currentTotemStep = TotemStep.DO_SWAP; } else resetAll(); lastTotemTime = now; } } break;
             case DO_SWAP: if (mc.currentScreen instanceof InventoryScreen) { if (now - lastTotemTime >= delay) { if (targetSwapSlot != -1) mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, targetSwapSlot, 40, SlotActionType.SWAP, mc.player); currentTotemStep = TotemStep.FIND_REFILL; lastTotemTime = now; } } break;
             case FIND_REFILL: if (mc.currentScreen instanceof InventoryScreen) { if (now - lastTotemTime >= delay) { if (isSlotTotem(36 + totemIdx)) { if (autoEsc.getValue()) currentTotemStep = TotemStep.CLOSE; else resetAll(); } else { targetRefillSlot = findTotemSlot(false); if (targetRefillSlot != -1) { aimSlot(targetRefillSlot); currentTotemStep = TotemStep.DO_REFILL; } else { if (autoEsc.getValue()) currentTotemStep = TotemStep.CLOSE; else resetAll(); } } lastTotemTime = now; } } break;
@@ -306,45 +282,46 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         }
     }
 
+    private void handleFastPearl() {
+        if (mc.player.getInventory().getStack(SLOT_PEARL).getItem() != Items.ENDER_PEARL) { sendInfo("Slot 4 không có Pearl!"); pearlTimer = 20; return; }
+        setHotbarSlot(SLOT_PEARL);
+        mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND); mc.player.swingHand(Hand.MAIN_HAND);
+        pearlTimer = 10;
+    }
+
     // ================= [UTILS] =================
-    private void forceLookAt(BlockPos pos) {
+    // Hàm này aim vào mặt trên của block (Y + 1.0)
+    private void forceLookAtBlockTop(BlockPos pos) {
         Vec3d eyes = mc.player.getEyePos();
-        Vec3d target = new Vec3d(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
-        double dx = target.x - eyes.x; double dy = target.y - eyes.y; double dz = target.z - eyes.z;
+        // Target là tâm của mặt trên block (chỗ đặt chân Crystal)
+        Vec3d target = new Vec3d(pos.getX() + 0.5, pos.getY() + 1.0, pos.getZ() + 0.5);
+        
+        double dx = target.x - eyes.x;
+        double dy = target.y - eyes.y;
+        double dz = target.z - eyes.z;
         double dist = Math.sqrt(dx * dx + dz * dz);
+        
         float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
         float pitch = (float) (-Math.toDegrees(Math.atan2(dy, dist)));
+        
         mc.player.setYaw(yaw); mc.player.setPitch(pitch);
         mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch, mc.player.isOnGround(), mc.player.horizontalCollision));
     }
-
+    
+    // Giữ hàm này cho các logic khác nếu cần, nhưng Crystal giờ dùng hàm trên
     private void forceLookAtEntity(Entity entity) {
-        Vec3d eyes = mc.player.getEyePos();
-        Vec3d target = entity.getPos().add(0, entity.getHeight() / 2, 0);
-        double dx = target.x - eyes.x; double dy = target.y - eyes.y; double dz = target.z - eyes.z;
-        double dist = Math.sqrt(dx * dx + dz * dz);
-        float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
-        float pitch = (float) (-Math.toDegrees(Math.atan2(dy, dist)));
+        Vec3d eyes = mc.player.getEyePos(); Vec3d target = entity.getPos().add(0, entity.getHeight() / 2, 0);
+        double dx = target.x - eyes.x; double dy = target.y - eyes.y; double dz = target.z - eyes.z; double dist = Math.sqrt(dx * dx + dz * dz);
+        float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0); float pitch = (float) (-Math.toDegrees(Math.atan2(dy, dist)));
         mc.player.setYaw(yaw); mc.player.setPitch(pitch);
         mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch, mc.player.isOnGround(), mc.player.horizontalCollision));
     }
-
     private void sendInfo(String msg) { if (mc.player != null) mc.player.sendMessage(Text.of("§b[AutoTotem] §f" + msg), false); }
     private int getHotbarSlot() { try { if (selectedSlotField == null) { try { selectedSlotField = PlayerInventory.class.getDeclaredField("selectedSlot"); } catch (NoSuchFieldException e) { selectedSlotField = PlayerInventory.class.getDeclaredField("currentItem"); } selectedSlotField.setAccessible(true); } return selectedSlotField.getInt(mc.player.getInventory()); } catch (Exception e) { return 0; } }
-    
     private void setHotbarSlot(int slot) { 
         if (getHotbarSlot() == slot) return; 
-        try { 
-            if (selectedSlotField == null) { 
-                try { selectedSlotField = PlayerInventory.class.getDeclaredField("selectedSlot"); } 
-                catch (NoSuchFieldException e) { selectedSlotField = PlayerInventory.class.getDeclaredField("currentItem"); } 
-                selectedSlotField.setAccessible(true); 
-            } 
-            selectedSlotField.setInt(mc.player.getInventory(), slot); 
-            mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(slot)); 
-        } catch (Exception e) { e.printStackTrace(); } 
+        try { if (selectedSlotField == null) { try { selectedSlotField = PlayerInventory.class.getDeclaredField("selectedSlot"); } catch (NoSuchFieldException e) { selectedSlotField = PlayerInventory.class.getDeclaredField("currentItem"); } selectedSlotField.setAccessible(true); } selectedSlotField.setInt(mc.player.getInventory(), slot); mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(slot)); } catch (Exception e) { e.printStackTrace(); } 
     }
-    
     private int findTotemSlot(boolean includeHotbar) { if (includeHotbar) for (int i = 36; i <= 44; i++) if (isSlotTotem(i)) return i; for (int i = 9; i <= 35; i++) if (isSlotTotem(i)) return i; return -1; }
     private boolean isSlotTotem(int id) { try { return mc.player.currentScreenHandler.slots.get(id).getStack().getItem() == Items.TOTEM_OF_UNDYING; } catch (Exception e) { return false; } }
     private void aimSlot(int slotId) { try { InventoryScreen s = (InventoryScreen) mc.currentScreen; Slot slot = mc.player.currentScreenHandler.slots.get(slotId); int guiLeft = (s.width - 176)/2, guiTop = (s.height - 166)/2; int x = guiLeft + slot.x + 8, y = guiTop + slot.y + 8; int jX = ThreadLocalRandom.current().nextInt(-3, 4), jY = ThreadLocalRandom.current().nextInt(-3, 4); double sc = mc.getWindow().getScaleFactor(); GLFW.glfwSetCursorPos(mc.getWindow().getHandle(), (x+jX)*sc, (y+jY)*sc); } catch (Exception ignored) {} }
