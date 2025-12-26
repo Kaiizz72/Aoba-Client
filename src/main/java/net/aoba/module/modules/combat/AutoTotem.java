@@ -40,7 +40,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
 
     private final MinecraftClient mc = MinecraftClient.getInstance();
 
-    // ================= SETTINGS (Đã bỏ min/max để fix lỗi) =================
+    // ================= SETTINGS =================
 
     // --- 1. TOTEM ---
     private final BooleanSetting totemEnable = BooleanSetting.builder().id("totem_enable").displayName("Bật Auto Totem").defaultValue(true).build();
@@ -50,7 +50,6 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     // --- 2. CRYSTAL (Giữ Chuột Phải) ---
     private final BooleanSetting crystalEnable = BooleanSetting.builder().id("crystal_enable").displayName("Bật Auto Crystal (Phải)").defaultValue(true).build();
     private final BooleanSetting placeObsidian = BooleanSetting.builder().id("crystal_obi").displayName("Tự đặt Obsidian").defaultValue(true).build();
-    // Đã bỏ min/max
     private final FloatSetting crystalRange = FloatSetting.builder().id("crystal_range").displayName("Tầm Crystal").defaultValue(5.0f).build();
     private final IntegerSetting crystalPlaceDelay = IntegerSetting.builder().id("crystal_p_delay").displayName("Delay Đặt Crys (tick)").defaultValue(1).build();
     private final IntegerSetting crystalBreakDelay = IntegerSetting.builder().id("crystal_b_delay").displayName("Delay Đập Crys (tick)").defaultValue(1).build();
@@ -61,7 +60,6 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
 
     // --- 4. PEARL (Tự động) ---
     private final BooleanSetting pearlEnable = BooleanSetting.builder().id("pearl_enable").displayName("Bật Auto Pearl").defaultValue(true).build();
-    // Đã bỏ min/max
     private final FloatSetting pearlRange = FloatSetting.builder().id("pearl_range").displayName("Tầm ném Pearl").defaultValue(15.0f).build();
     private final IntegerSetting pearlCooldown = IntegerSetting.builder().id("pearl_cooldown").displayName("Cooldown Pearl (tick)").defaultValue(40).build();
 
@@ -99,11 +97,8 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         addSetting(pearlEnable); addSetting(pearlRange); addSetting(pearlCooldown);
     }
 
-    // --- FIX ERROR: IMPLEMENT MISSING ABSTRACT METHOD ---
     @Override
     public void onToggle() {
-        // Hàm này bắt buộc phải có để override method abstract của class cha
-        // Logic bật/tắt đã được xử lý ở onEnable/onDisable, nên để trống cũng được
     }
 
     @Override
@@ -139,6 +134,12 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
                 }
             }
         }
+    }
+
+    // --- FIX: Implement onTick(Post) để không bị lỗi Abstract Method ---
+    @Override
+    public void onTick(TickEvent.Post event) {
+        // Không làm gì cả, nhưng bắt buộc phải có để thỏa mãn Interface
     }
 
     @Override
@@ -207,7 +208,6 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
                     crystalPlaceTimer = crystalPlaceDelay.getValue();
                 }
             } else if (placeObsidian.getValue()) {
-                // FIX ERROR: Bỏ .getMaterial(), dùng isReplaceable() trực tiếp
                 if (mc.world.getBlockState(pos).isReplaceable()) { 
                     setHotbarSlot(SLOT_OBSIDIAN);
                     if (mc.player.getMainHandStack().getItem() == Items.OBSIDIAN) {
