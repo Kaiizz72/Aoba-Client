@@ -34,19 +34,19 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
 
     private final MinecraftClient mc = MinecraftClient.getInstance();
 
-    // Settings
+    // Cài đặt
     private final BooleanSetting totemEnable = BooleanSetting.builder().id("totem_enable").displayName("1. Ưu tiên Totem (Offhand)").defaultValue(true).build();
-    private final IntegerSetting totemDelay = IntegerSetting.builder().id("totem_delay").displayName("Tốc độ bơm (ms)").defaultValue(80).build();
+    private final IntegerSetting totemDelay = IntegerSetting.builder().id("totem_delay").displayName("Tốc độ bơm (ms)").defaultValue(100).build();
     private final BooleanSetting crystalEnable = BooleanSetting.builder().id("crystal_enable").displayName("2. Crystal (Bạn Tự Aim)").defaultValue(true).build();
     private final BooleanSetting anchorEnable = BooleanSetting.builder().id("anchor_enable").displayName("3. Anchor (Máy Tự Aim)").defaultValue(true).build();
 
-    // Hotbar Mapping
+    // Slot cố định
     private final int S_OBI = 1;     // Phím 2
     private final int S_CRY = 2;     // Phím 3
     private final int S_ANCHOR = 6;  // Phím 7
     private final int S_GLOW = 7;    // Phím 8
 
-    // States
+    // Trạng thái
     private boolean isRefilling = false;
     private boolean totemPopped = false;
     private long lastTotemAction = 0;
@@ -56,16 +56,17 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     private int crystalStage = 0;
     private int anchorStage = 0;
     private int waitTimer = 0;
-    private final int ACTION_DELAY = 7; // Tốc độ PvP ổn định
+    private final int ACTION_DELAY = 8; // Chậm lại một chút để ổn định 
     private BlockPos targetPos = null;
     
+    private static Field selectedSlotField = null; // Chìa khóa để mở biến Private
     private boolean lastRight = false;
     private boolean lastLeft = false;
 
     public AutoTotem() {
         super("AutoTotem");
         setCategory(Category.of("Combat"));
-        setDescription("V42: Visual Hotbar Fix & Offhand Totem");
+        setDescription("V45: Visual Slot Fix & Absolute Totem Priority");
         addSetting(totemEnable); addSetting(totemDelay);
         addSetting(crystalEnable); addSetting(anchorEnable);
     }
@@ -90,7 +91,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     @Override public void onTick(TickEvent.Pre event) {
         if (mc.player == null) return;
 
-        // --- 1. ƯU TIÊN TOTEM (OFFHAND) ---
+        // --- 1. ƯU TIÊN CAO NHẤT: AUTO TOTEM ---
         if (totemEnable.getValue() && (totemPopped || mc.player.getOffHandStack().isEmpty())) {
             totemPopped = false;
             if (!isRefilling) {
@@ -98,21 +99,24 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
                 lastTotemAction = System.currentTimeMillis();
             }
         }
-        if (isRefilling) { handleOffhandTotem(); return; } // Khóa combat
+        if (isRefilling) {
+            handleOffhandTotem();
+            return; // KHÓA hoàn toàn Crystal/Anchor khi đang bơm Totem
+        }
 
-        // --- 2. HÀNH ĐỘNG COMBAT ---
+        // --- 2. LOGIC CHIẾN ĐẤU ---
         if (waitTimer > 0) { waitTimer--; return; }
 
         long win = mc.getWindow().getHandle();
         boolean right = GLFW.glfwGetMouseButton(win, GLFW.GLFW_MOUSE_BUTTON_RIGHT) == GLFW.GLFW_PRESS;
         boolean left = GLFW.glfwGetMouseButton(win, GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_PRESS;
 
-        // Crystal Sequence (Click Phải 1 lần - Không Aim)
+        // Crystal (Tự Aim Obsidian)
         if (crystalEnable.getValue() && right && !lastRight && crystalStage == 0) crystalStage = 1;
         if (crystalStage > 0) doCrystalSequence();
         lastRight = right;
 
-        // Anchor Sequence (Click Trái 1 lần - Có Aim)
+        // Anchor (Máy Tự Aim Anchor)
         if (anchorEnable.getValue() && left && !lastLeft && anchorStage == 0) anchorStage = 1;
         if (anchorStage > 0) doAnchorSequence();
         lastLeft = left;
@@ -131,8 +135,8 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
                     if (mc.player.currentScreenHandler.getSlot(i).getStack().isOf(Items.TOTEM_OF_UNDYING)) { tIdx = i; break; }
                 }
                 if (tIdx != -1) {
-                    // Swap vào slot 45 (Offhand)
-                    mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, tIdx, 40, SlotActionType.SWAP, mc.player);
+                    // Swap thẳng vào ô Offhand (Tay trái)
+                    mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, tIdx, 45, SlotActionType.SWAP, mc.player);
                     totemStep = TotemStep.CLOSE;
                 } else { isRefilling = false; mc.setScreen(null); }
                 lastTotemAction = now;
@@ -184,7 +188,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
                 visualSwitch(S_ANCHOR);
                 if (mc.crosshairTarget instanceof BlockHitResult hit) {
                     BlockPos p = hit.getBlockPos();
-                    lookAt(p); // MÁY TỰ AIM ANCHOR
+                    lookAt(p); // Tự Aim Anchor
                     if (mc.world.getBlockState(p).isOf(Blocks.RESPAWN_ANCHOR)) { targetPos = p; anchorStage = 2; }
                     else {
                         mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hit);
@@ -198,33 +202,48 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
                 if (targetPos != null) {
                     lookAt(targetPos);
                     BlockHitResult bhr = new BlockHitResult(new Vec3d(targetPos.getX()+0.5, targetPos.getY()+0.5, targetPos.getZ()+0.5), Direction.UP, targetPos, false);
-                    mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, bhr); // Nạp
-                    waitTimer = 2; // Nghỉ cực ngắn giữa nạp và nổ
-                    mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, bhr); // Nổ
+                    mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, bhr);
+                    waitTimer = 2; 
+                    mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, bhr);
                     mc.player.swingHand(Hand.MAIN_HAND);
                 }
                 anchorStage = 0; targetPos = null; break;
         }
     }
 
-    // --- HÀM CHUYỂN SLOT THỰC SỰ NHẢY TRÊN MÀN HÌNH ---
+    // --- HÀM THAY ĐỔI SLOT (VẪN GIỮ SELECTEDSLOT QUA REFLECTION) ---
     private void visualSwitch(int slot) {
         if (mc.player == null) return;
         
-        // 1. Gửi lệnh cho Server
+        // 1. Gửi gói tin cho Server
         mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(slot));
         
-        // 2. Ép Client cập nhật ô đang chọn (Làm thanh highlight nhảy đi)
-        mc.player.getInventory().selectedSlot = slot;
-        
-        // 3. Đồng bộ hóa tay (Hand swing sync)
-        mc.player.getInventory().markDirty();
+        // 2. Ép nhảy ô Visual bằng Reflection (Thay thế cho selectedSlot = slot)
+        try {
+            if (selectedSlotField == null) {
+                // Thử tìm tên biến trong môi trường Minecraft (Yarn/Intermediary)
+                String[] possibleNames = {"selectedSlot", "currentItem", "field_7533"};
+                for (String name : possibleNames) {
+                    try {
+                        selectedSlotField = PlayerInventory.class.getDeclaredField(name);
+                        selectedSlotField.setAccessible(true);
+                        break;
+                    } catch (Exception ignored) {}
+                }
+            }
+            if (selectedSlotField != null) {
+                // Tương đương với việc ghi: mc.player.getInventory().selectedSlot = slot;
+                selectedSlotField.setInt(mc.player.getInventory(), slot);
+            }
+        } catch (Exception e) {
+            // Nếu có lỗi, ít nhất Server vẫn nhận được packet từ bước 1
+        }
     }
 
     private void lookAt(BlockPos pos) {
-        Vec3d t = new Vec3d(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+        Vec3d target = new Vec3d(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
         Vec3d eye = mc.player.getEyePos();
-        double dx = t.x - eye.x, dy = t.y - eye.y, dz = t.z - eye.z;
+        double dx = target.x - eye.x, dy = target.y - eye.y, dz = target.z - eye.z;
         double dist = Math.sqrt(dx * dx + dz * dz);
         float yaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90f;
         float pitch = (float) -Math.toDegrees(Math.atan2(dy, dist));
