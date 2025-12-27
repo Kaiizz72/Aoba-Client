@@ -12,22 +12,28 @@ import net.aoba.settings.types.IntegerSetting;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.InventoryScreen;
+import net.minecraft.entity.Entity;
+import net.minecraft.entity.decoration.EndCrystalEntity;
+import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket;
+import net.minecraft.network.packet.c2s.play.PlayerInteractBlockC2SPacket;
 import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
 import net.minecraft.network.packet.s2c.play.EntityStatusS2CPacket;
 import net.minecraft.screen.slot.Slot;
 import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 
 import java.lang.reflect.Field;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Random;
 
 public class AutoTotem extends Module implements ReceivePacketListener, TickListener {
@@ -35,26 +41,35 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     private final MinecraftClient mc = MinecraftClient.getInstance();
     private final Random random = new Random();
 
-    private final IntegerSetting totemDelay = IntegerSetting.builder().id("totem_v54").displayName("Delay Totem (ms)").defaultValue(150).build();
-    private final BooleanSetting anchorEnable = BooleanSetting.builder().id("anchor_v54").displayName("Auto Anchor (Chuột Phải)").defaultValue(true).build();
+    // --- CÀI ĐẶT ---
+    private final IntegerSetting totemDelay = IntegerSetting.builder().id("totem_v57").displayName("Totem Delay (ms)").defaultValue(150).build();
+    private final BooleanSetting stopMove = BooleanSetting.builder().id("stop_move").displayName("Stop Move (Safety)").defaultValue(true).build();
+    
+    // Crystal Settings
+    private final BooleanSetting crystalEnable = BooleanSetting.builder().id("crystal_enable").displayName("Auto Crystal (R-Click)").defaultValue(true).build();
+    private final IntegerSetting actionDelay = IntegerSetting.builder().id("action_delay").displayName("Action Delay (Tick)").defaultValue(3).build();
+    private final BooleanSetting placeObsidian = BooleanSetting.builder().id("place_obs").displayName("Auto Place Obs").defaultValue(true).build();
 
-    private final int S_ANCHOR = 6; // Slot 7
-    private final int S_GLOW = 7;   // Slot 8
+    // --- SLOT CONFIG (Index 0-8) ---
+    private final int S_OBSIDIAN = 1; // Slot 2
+    private final int S_CRYSTAL = 2;  // Slot 3
 
+    // Variables
     private boolean isWorking = false; 
     private long nextTotemAction = 0;
     private enum TotemStep { SELECT, OPEN, SWAP, REFILL, CLOSE }
     private TotemStep tStep = TotemStep.SELECT;
 
-    private int anchorStage = 0;
-    private int waitTicks = 0;
-    private BlockPos targetPos = null;
+    // Anti-Kick Variables
+    private int tickCounter = 0; // Đếm delay hành động
+    private boolean actionSentThisTick = false; // Đảm bảo chỉ 1 action/tick
 
     public AutoTotem() {
         super("AutoTotem");
         setCategory(Category.of("Combat"));
-        setDescription("V54: Right-Click Trigger + Anti-Air Placement");
-        addSetting(totemDelay); addSetting(anchorEnable);
+        setDescription("V57: Anti-Kick (Packet Limiter + Strict Delay)");
+        addSetting(totemDelay); addSetting(stopMove);
+        addSetting(crystalEnable); addSetting(actionDelay); addSetting(placeObsidian);
     }
 
     @Override public void onEnable() {
@@ -64,114 +79,212 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     }
 
     private void reset() {
-        isWorking = false; anchorStage = 0; waitTicks = 0; targetPos = null;
+        isWorking = false; 
+        tickCounter = 0;
     }
 
     @Override public void onReceivePacket(ReceivePacketEvent event) {
         if (mc.player == null) return;
         if (event.GetPacket() instanceof EntityStatusS2CPacket p && p.getStatus() == 35 && p.getEntity(mc.world) == mc.player) {
-            if (!isWorking) { isWorking = true; tStep = TotemStep.SELECT; nextTotemAction = System.currentTimeMillis() + 20; }
+            if (!isWorking) { isWorking = true; tStep = TotemStep.SELECT; nextTotemAction = System.currentTimeMillis() + 50; }
         }
     }
 
     @Override public void onTick(TickEvent.Pre event) {
         if (mc.player == null || mc.world == null) return;
+        
+        // Reset trạng thái packet mỗi tick mới
+        actionSentThisTick = false;
+        if (tickCounter > 0) tickCounter--;
 
-        // 1. ƯU TIÊN TOTEM (Bơm đồ quan trọng nhất)
+        // --- 1. TOTEM (LUÔN ƯU TIÊN CAO NHẤT) ---
         if (isWorking) {
+            if (stopMove.getValue() && tStep != TotemStep.SELECT && tStep != TotemStep.CLOSE) stopPlayerMovement();
             if (System.currentTimeMillis() >= nextTotemAction) handleTotem();
+            return; // Đang cứu mạng thì không đánh nhau
+        }
+
+        // --- 2. CRYSTAL (KHI GIỮ CHUỘT PHẢI) ---
+        long win = mc.getWindow().getHandle();
+        boolean isRightPressed = GLFW.glfwGetMouseButton(win, GLFW.GLFW_MOUSE_BUTTON_RIGHT) == GLFW.GLFW_PRESS;
+
+        if (crystalEnable.getValue() && isRightPressed) {
+            // Nếu đang delay thì nghỉ
+            if (tickCounter > 0) return;
+            
+            PlayerEntity target = findNearestTarget(5.0); // Tầm 5 block cho an toàn
+            if (target != null) {
+                handleAutoCrystal(target);
+            }
+        }
+    }
+
+    // --- LOGIC CRYSTAL ANTI-KICK ---
+    private void handleAutoCrystal(PlayerEntity target) {
+        if (actionSentThisTick) return; // Nếu tick này làm gì rồi thì thôi
+
+        // 1. ƯU TIÊN ĐẬP CRYSTAL (BREAK)
+        EndCrystalEntity crystal = findNearestCrystal(target, 4.0);
+        if (crystal != null) {
+            // Check cooldown đập (Attack speed)
+            if (mc.player.getAttackCooldownProgress(0.5f) >= 1.0f) {
+                attackEntity(crystal);
+                setDelay(2); // Delay ngắn sau khi đập
+                return;
+            }
+        }
+
+        // 2. ĐẶT CRYSTAL (PLACE)
+        BlockPos placePos = findCrystalSpot(target);
+        if (placePos != null) {
+            // Switch sang Slot 3 (Crystal)
+            if (switchToSlot(S_CRYSTAL)) {
+                setDelay(1); return; // Tốn 1 tick để switch slot cho server nhận
+            }
+            
+            // Xoay & Đặt
+            rotateAndPlace(placePos);
+            setDelay(actionDelay.getValue()); // Delay theo setting
             return;
         }
 
-        // 2. XỬ LÝ ANCHOR (CHỈ KHI GIỮ CHUỘT PHẢI)
-        if (waitTicks > 0) { waitTicks--; return; }
-
-        long win = mc.getWindow().getHandle();
-        // ĐỔI SANG CHUỘT PHẢI (RIGHT_BUTTON)
-        boolean isRightPressed = GLFW.glfwGetMouseButton(win, GLFW.GLFW_MOUSE_BUTTON_RIGHT) == GLFW.GLFW_PRESS;
-
-        if (anchorEnable.getValue()) {
-            // Chỉ bắt đầu hoặc tiếp tục nếu đang giữ chuột phải
-            if (isRightPressed || anchorStage > 0) {
-                runAnchorStrictSequence(isRightPressed);
-            }
-        }
-    }
-
-    private void runAnchorStrictSequence(boolean isPressed) {
-        // KIỂM TRA MỤC TIÊU: Nếu không nhìn vào block, dừng ngay để tránh kick
-        if (!(mc.crosshairTarget instanceof BlockHitResult hit) || hit.getType() == HitResult.Type.MISS) {
-            if (anchorStage == 0) return; // Không bắt đầu nếu nhìn vào không khí
-        } else {
-            // Cập nhật targetPos liên tục theo tâm ngắm
-            BlockPos currentLook = hit.getBlockPos();
-            if (anchorStage == 0 || anchorStage == 1) {
-                targetPos = mc.world.getBlockState(currentLook).isOf(Blocks.RESPAWN_ANCHOR) 
-                            ? currentLook : currentLook.offset(hit.getSide());
-            }
-        }
-
-        switch (anchorStage) {
-            case 0 -> { if (isPressed && targetPos != null) anchorStage = 1; }
-
-            case 1 -> { // Bước 1: Đổi sang Anchor + Quay mặt
-                lookAt(targetPos);
-                forceSetSlot(S_ANCHOR);
-                mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(S_ANCHOR));
-                anchorStage = 2;
-                waitTicks = 2; // Đợi Server đồng bộ Slot
-            }
-
-            case 2 -> { // Bước 2: Đặt Block (Chỉ đặt nếu là không khí)
-                if (targetPos != null && mc.world.getBlockState(targetPos).isAir()) {
-                    lookAt(targetPos);
-                    sendInteract(targetPos);
-                    waitTicks = 1;
-                }
-                anchorStage = 3;
-            }
-
-            case 3 -> { // Bước 3: Đổi sang Glowstone
-                forceSetSlot(S_GLOW);
-                mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(S_GLOW));
-                anchorStage = 4;
-                waitTicks = 2; // Đợi Server đồng bộ Slot
-            }
-
-            case 4 -> { // Bước 4: Nạp Glowstone (Chỉ nạp nếu đúng là Anchor)
-                if (targetPos != null && mc.world.getBlockState(targetPos).isOf(Blocks.RESPAWN_ANCHOR)) {
-                    lookAt(targetPos);
-                    sendInteract(targetPos);
-                    anchorStage = 5;
-                    waitTicks = 1;
-                } else anchorStage = 0; // Nếu block bị mất, reset chu kỳ
-            }
-
-            case 5 -> { // Bước 5: Nổ
-                if (targetPos != null && mc.world.getBlockState(targetPos).isOf(Blocks.RESPAWN_ANCHOR)) {
-                    sendInteract(targetPos);
+        // 3. ĐẶT OBSIDIAN (PLACE BASE)
+        if (placeObsidian.getValue()) {
+            BlockPos obsPos = findObsidianSpot(target);
+            if (obsPos != null) {
+                // Switch sang Slot 2 (Obsidian)
+                if (switchToSlot(S_OBSIDIAN)) {
+                    setDelay(1); return;
                 }
                 
-                if (isPressed) {
-                    anchorStage = 1; // Lặp lại nếu vẫn giữ chuột phải
-                    waitTicks = 1;
-                } else {
-                    anchorStage = 0;
-                    targetPos = null;
-                }
+                // Xoay & Đặt
+                rotateAndPlace(obsPos);
+                // Đặt block cứng cần delay lâu hơn chút để tránh kẹt
+                setDelay(actionDelay.getValue() + 1); 
+                return;
             }
         }
     }
 
-    private void sendInteract(BlockPos pos) {
-        if (pos == null) return;
-        Vec3d center = new Vec3d(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
-        BlockHitResult bhr = new BlockHitResult(center, Direction.UP, pos, false);
-        mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, bhr);
-        mc.player.swingHand(Hand.MAIN_HAND);
+    // --- HÀM HỖ TRỢ ANTI-KICK ---
+    
+    // Switch slot an toàn, trả về true nếu vừa mới switch (để code chính delay)
+    private boolean switchToSlot(int slotIndex) {
+        if (mc.player.getInventory().selectedSlot != slotIndex) {
+            forceSetSlot(slotIndex);
+            mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(slotIndex));
+            return true; 
+        }
+        return false;
     }
 
-    // --- CÁC HÀM HỖ TRỢ GIỮ NGUYÊN TỪ V53 ---
+    private void setDelay(int ticks) {
+        this.tickCounter = ticks;
+        this.actionSentThisTick = true;
+    }
+
+    // Xoay nhanh -> Đặt -> Trả góc nhìn (Silent-like)
+    private void rotateAndPlace(BlockPos pos) {
+        Vec3d eyes = mc.player.getEyePos();
+        Vec3d vec = new Vec3d(pos.getX() + 0.5, pos.getY() + 1.0, pos.getZ() + 0.5);
+        
+        // Tính góc
+        double dx = vec.x - eyes.x;
+        double dy = vec.y - eyes.y;
+        double dz = vec.z - eyes.z;
+        double dist = Math.sqrt(dx * dx + dz * dz);
+        float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
+        float pitch = (float) (-Math.toDegrees(Math.atan2(dy, dist)));
+
+        // Lưu góc cũ
+        float oldYaw = mc.player.getYaw();
+        float oldPitch = mc.player.getPitch();
+
+        // Gửi gói tin xoay (Fake rotation)
+        mc.player.setYaw(yaw);
+        mc.player.setPitch(pitch);
+        
+        // Tương tác
+        BlockHitResult hit = new BlockHitResult(vec, Direction.UP, pos, false);
+        // Dùng sendPacket thay vì interactBlock trực tiếp để kiểm soát tốt hơn
+        mc.getNetworkHandler().sendPacket(new PlayerInteractBlockC2SPacket(Hand.MAIN_HAND, hit, 0));
+        mc.player.swingHand(Hand.MAIN_HAND);
+        
+        // Trả góc ngay lập tức (Để màn hình không bị giật loạn xạ)
+        mc.player.setYaw(oldYaw);
+        mc.player.setPitch(oldPitch);
+        
+        actionSentThisTick = true;
+    }
+
+    private void attackEntity(Entity entity) {
+        mc.interactionManager.attackEntity(mc.player, entity);
+        mc.player.swingHand(Hand.MAIN_HAND);
+        actionSentThisTick = true;
+    }
+
+    // --- LOGIC TÌM KIẾM --- (Đã tối ưu range)
+
+    private BlockPos findCrystalSpot(PlayerEntity target) {
+        BlockPos pPos = target.getBlockPos();
+        // Range gần (1 block) để tránh bị anticheat bắt lỗi Reach
+        BlockPos[] offsets = { pPos.down(), pPos.north().down(), pPos.south().down(), pPos.east().down(), pPos.west().down() };
+        for (BlockPos pos : offsets) {
+            if (canPlaceCrystal(pos)) return pos;
+        }
+        return null;
+    }
+
+    private BlockPos findObsidianSpot(PlayerEntity target) {
+        BlockPos pPos = target.getBlockPos();
+        // Chỉ check 4 hướng cơ bản
+        BlockPos[] offsets = { pPos.north().down(), pPos.south().down(), pPos.east().down(), pPos.west().down() };
+        for (BlockPos pos : offsets) {
+            if (mc.world.getBlockState(pos).isAir() || mc.world.getBlockState(pos).getMaterial().isReplaceable()) {
+                if (!mc.world.getBlockState(pos.down()).isAir()) return pos;
+            }
+        }
+        return null;
+    }
+
+    private boolean canPlaceCrystal(BlockPos pos) {
+        if (mc.world.getBlockState(pos).isOf(Blocks.OBSIDIAN) || mc.world.getBlockState(pos).isOf(Blocks.BEDROCK)) {
+            return mc.world.getBlockState(pos.up()).isAir();
+        }
+        return false;
+    }
+
+    private PlayerEntity findNearestTarget(double range) {
+        PlayerEntity closest = null;
+        double minDist = range * range;
+        for (PlayerEntity p : mc.world.getPlayers()) {
+            if (p != mc.player && p.getHealth() > 0 && !p.isCreative()) {
+                double dist = mc.player.squaredDistanceTo(p);
+                if (dist < minDist) { minDist = dist; closest = p; }
+            }
+        }
+        return closest;
+    }
+    
+    private EndCrystalEntity findNearestCrystal(PlayerEntity target, double range) {
+        List<EndCrystalEntity> list = mc.world.getEntitiesByClass(EndCrystalEntity.class, new Box(target.getBlockPos()).expand(range), e -> true);
+        if (list.isEmpty()) return null;
+        return list.stream().min(Comparator.comparingDouble(e -> e.squaredDistanceTo(target))).orElse(null);
+    }
+
+    // --- TOTEM UTILS (Giữ nguyên) ---
+    private void stopPlayerMovement() {
+        mc.options.forwardKey.setPressed(false);
+        mc.options.backKey.setPressed(false);
+        mc.options.leftKey.setPressed(false);
+        mc.options.rightKey.setPressed(false);
+        mc.options.jumpKey.setPressed(false);
+        if (mc.player.isSprinting()) {
+            mc.player.setSprinting(false);
+            mc.getNetworkHandler().sendPacket(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.STOP_SPRINTING));
+        }
+    }
+
     private void handleTotem() {
         long delay = totemDelay.getValue() + random.nextInt(50);
         switch (tStep) {
@@ -181,23 +294,33 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
             }
             case OPEN -> {
                 if (!(mc.currentScreen instanceof InventoryScreen)) mc.setScreen(new InventoryScreen(mc.player));
-                tStep = TotemStep.SWAP; nextTotemAction = System.currentTimeMillis() + delay;
+                if (stopMove.getValue()) stopPlayerMovement();
+                tStep = TotemStep.SWAP; nextTotemAction = System.currentTimeMillis() + delay + 50; 
             }
             case SWAP -> {
+                if (stopMove.getValue()) stopPlayerMovement();
                 int slot = findAnyTotemSlot();
-                if (slot != -1) { aimAtSlot(slot); mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, slot, 40, SlotActionType.SWAP, mc.player); tStep = TotemStep.REFILL; } 
-                else reset();
+                if (slot != -1) { 
+                    aimAtSlot(slot); 
+                    mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, slot, 40, SlotActionType.SWAP, mc.player); 
+                    tStep = TotemStep.REFILL; 
+                } else reset();
                 nextTotemAction = System.currentTimeMillis() + delay;
             }
             case REFILL -> {
+                if (stopMove.getValue()) stopPlayerMovement();
                 int slot = findTotemInStorage();
-                if (slot != -1 && !isSlotTotem(44)) { aimAtSlot(slot); mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, slot, 8, SlotActionType.SWAP, mc.player); }
+                if (slot != -1 && !isSlotTotem(44)) { 
+                    aimAtSlot(slot); 
+                    mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, slot, 8, SlotActionType.SWAP, mc.player); 
+                }
                 tStep = TotemStep.CLOSE; nextTotemAction = System.currentTimeMillis() + delay;
             }
             case CLOSE -> { mc.setScreen(null); reset(); }
         }
     }
 
+    // --- SYSTEM UTILS ---
     private void forceSetSlot(int slotIndex) {
         if (mc.player == null) return;
         PlayerInventory inv = mc.player.getInventory();
@@ -208,15 +331,6 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         } catch (Exception e) {
             try { Field f = PlayerInventory.class.getDeclaredField("field_7545"); f.setAccessible(true); f.setInt(inv, slotIndex); } catch (Exception ignored) {}
         }
-    }
-
-    private void lookAt(BlockPos pos) {
-        if (pos == null) return;
-        Vec3d eye = mc.player.getEyePos();
-        double dx = pos.getX() + 0.5 - eye.x, dy = pos.getY() + 0.5 - eye.y, dz = pos.getZ() + 0.5 - eye.z;
-        double dist = Math.sqrt(dx * dx + dz * dz);
-        mc.player.setYaw((float) Math.toDegrees(Math.atan2(dz, dx)) - 90f);
-        mc.player.setPitch((float) -Math.toDegrees(Math.atan2(dy, dist)));
     }
 
     private void aimAtSlot(int slotId) {
@@ -233,16 +347,13 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
         for (int i = 9; i <= 35; i++) if (isSlotTotem(i)) return i;
         return -1;
     }
-
     private int findTotemInStorage() {
         for (int i = 9; i <= 35; i++) if (isSlotTotem(i)) return i;
         return -1;
     }
-
     private boolean isSlotTotem(int id) {
         try { return mc.player.currentScreenHandler.slots.get(id).getStack().isOf(Items.TOTEM_OF_UNDYING); } catch (Exception e) { return false; }
     }
-
     @Override public void onDisable() {
         Aoba.getInstance().eventManager.RemoveListener(ReceivePacketListener.class, this);
         Aoba.getInstance().eventManager.RemoveListener(TickListener.class, this);
@@ -250,4 +361,4 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     }
     @Override public void onTick(TickEvent.Post event) {}
     @Override public void onToggle() {}
-}
+            }
