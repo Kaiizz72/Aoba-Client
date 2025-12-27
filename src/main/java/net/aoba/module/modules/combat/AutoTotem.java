@@ -84,7 +84,7 @@ public class AutoTotem extends Module implements ReceivePacketListener, TickList
     @Override public void onTick(TickEvent.Pre event) {
         if (mc.player == null) return;
 
-        // 1. TOTEM TRƯỚC HẾT
+        // 1. TOTEM TRƯỚC HẾTT
         if (forceTotemSlot) {
             hardSwitch(S_TOTEM);
             forceTotemSlot = false;
