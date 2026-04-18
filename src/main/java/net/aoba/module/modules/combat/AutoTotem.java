@@ -72,9 +72,8 @@ public class AutoTotem extends Module implements PlayerHealthListener, ReceivePa
 	public void onToggle() {
 	}
 
-	// Đã đổi từ TickEvent.Pre sang TickEvent.Post theo đúng yêu cầu của log lỗi
-	@Override
-	public void onTick(TickEvent.Post event) { 
+	// Đưa logic vào một hàm dùng chung để tránh lặp code
+	private void handleTickLogic() {
 		if (taskQueue.isEmpty()) return;
 
 		if (ticksWaited < delaySetting.getValue().intValue()) {
@@ -85,6 +84,18 @@ public class AutoTotem extends Module implements PlayerHealthListener, ReceivePa
 		Runnable task = taskQueue.poll();
 		if (task != null) task.run();
 		ticksWaited = 0;
+	}
+
+	// FIX: Cài đặt cả Pre và Post để "ép" compiler phải chấp nhận
+	@Override
+	public void onTick(TickEvent.Pre event) {
+		handleTickLogic();
+	}
+
+	@Override
+	public void onTick(TickEvent.Post event) {
+		// Để trống hoặc gọi handleTickLogic() tùy bạn, 
+		// nhưng thường chỉ cần chạy ở Pre là đủ.
 	}
 
 	@Override
