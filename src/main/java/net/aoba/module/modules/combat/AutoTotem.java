@@ -9,7 +9,6 @@ import net.aoba.event.listeners.ReceivePacketListener;
 import net.aoba.event.listeners.TickListener;
 import net.aoba.module.Category;
 import net.aoba.module.Module;
-import net.aoba.settings.types.BooleanSetting;
 import net.aoba.settings.types.FloatSetting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.inventory.ContainerScreen;
@@ -69,18 +68,16 @@ public class AutoTotem extends Module implements PlayerHealthListener, ReceivePa
 		isSwapping = false;
 	}
 
-    // Sửa lỗi: Thêm onToggle() để thỏa mãn điều kiện của class Module
 	@Override
 	public void onToggle() {
 	}
 
-    // Sửa lỗi: Nếu TickListener của bạn không nhận tham số, bỏ "TickEvent event" đi.
-    // Nếu vẫn báo lỗi @Override, hãy kiểm tra lại file TickListener.java trong source.
+	// FIX LỖI 1 & 3: Đổi tham số thành TickEvent.Post theo đúng yêu cầu của TickListener
 	@Override
-	public void onTick(TickEvent event) { 
+	public void onTick(TickEvent.Post event) { 
 		if (taskQueue.isEmpty()) return;
 
-		if (ticksWaited < delaySetting.getValue()) {
+		if (ticksWaited < (int)delaySetting.getValue()) {
 			ticksWaited++;
 			return;
 		}
@@ -136,16 +133,27 @@ public class AutoTotem extends Module implements PlayerHealthListener, ReceivePa
 			final int finalTotemSlot = totemSlot;
 
 			taskQueue.add(() -> {
-				// FIX LỖI PRIVATE: Trong Official Mappings, selected là private. 
-				// Ta sẽ dùng biến 'selected' của lớp Inventory thông qua ép kiểu nếu cần, 
-				// hoặc sử dụng field trực tiếp nếu Client có Accessor.
-				// Nếu dòng dưới vẫn lỗi, bạn hãy thử đổi thành: inventory.selected = 8;
-				mc.player.getInventory().selected = 8; 
+				// FIX LỖI 2: Xóa dòng selected = 8 vì bị private access. 
+				// Module vẫn sẽ tráo Totem vào Offhand bình thường.
 				mc.setScreen(new InventoryScreen(mc.player));
 			});
 
 			taskQueue.add(() -> {
 				mc.gameMode.handleInventoryMouseClick(mc.player.containerMenu.containerId, finalTotemSlot, 40, ClickType.SWAP, mc.player);
+			});
+
+			// Kéo thêm 1 cái totem nữa xuống Slot 8 (nếu còn totem khác trong túi)
+			taskQueue.add(() -> {
+				int backupSlot = -1;
+				for (int i = 9; i <= 36; i++) {
+					if (inventory.getItem(i).getItem() == Items.TOTEM_OF_UNDYING) {
+						backupSlot = i;
+						break;
+					}
+				}
+				if (backupSlot != -1) {
+					mc.gameMode.handleInventoryMouseClick(mc.player.containerMenu.containerId, backupSlot, 8, ClickType.SWAP, mc.player);
+				}
 			});
 
 			taskQueue.add(() -> {
