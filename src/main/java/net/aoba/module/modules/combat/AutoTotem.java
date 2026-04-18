@@ -72,12 +72,13 @@ public class AutoTotem extends Module implements PlayerHealthListener, ReceivePa
 	public void onToggle() {
 	}
 
-	// FIX LỖI 1 & 3: Đổi tham số thành TickEvent.Post theo đúng yêu cầu của TickListener
+	// FIX LỖI 1: Sử dụng TickEvent.Pre theo đúng yêu cầu của compiler
 	@Override
-	public void onTick(TickEvent.Post event) { 
+	public void onTick(TickEvent.Pre event) { 
 		if (taskQueue.isEmpty()) return;
 
-		if (ticksWaited < (int)delaySetting.getValue()) {
+		// FIX LỖI 2: Sử dụng .intValue() để chuyển từ Float sang int an toàn
+		if (ticksWaited < delaySetting.getValue().intValue()) {
 			ticksWaited++;
 			return;
 		}
@@ -132,17 +133,17 @@ public class AutoTotem extends Module implements PlayerHealthListener, ReceivePa
 			isSwapping = true;
 			final int finalTotemSlot = totemSlot;
 
+			// Bước 1: Mở túi đồ
 			taskQueue.add(() -> {
-				// FIX LỖI 2: Xóa dòng selected = 8 vì bị private access. 
-				// Module vẫn sẽ tráo Totem vào Offhand bình thường.
 				mc.setScreen(new InventoryScreen(mc.player));
 			});
 
+			// Bước 2: Tráo Totem vào Offhand (F)
 			taskQueue.add(() -> {
 				mc.gameMode.handleInventoryMouseClick(mc.player.containerMenu.containerId, finalTotemSlot, 40, ClickType.SWAP, mc.player);
 			});
 
-			// Kéo thêm 1 cái totem nữa xuống Slot 8 (nếu còn totem khác trong túi)
+			// Bước 3: Đưa Totem dự phòng vào Slot 8 (Số 9)
 			taskQueue.add(() -> {
 				int backupSlot = -1;
 				for (int i = 9; i <= 36; i++) {
@@ -156,6 +157,7 @@ public class AutoTotem extends Module implements PlayerHealthListener, ReceivePa
 				}
 			});
 
+			// Bước 4: Đóng túi
 			taskQueue.add(() -> {
 				mc.player.closeContainer();
 				mc.setScreen(null);
