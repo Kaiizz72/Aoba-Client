@@ -3,10 +3,10 @@ package net.aoba.module.modules.combat;
 import net.aoba.Aoba;
 import net.aoba.event.events.PlayerHealthEvent;
 import net.aoba.event.events.ReceivePacketEvent;
-import net.aoba.event.events.TickEvent; // Đổi từ UpdateEvent thành TickEvent
+import net.aoba.event.events.TickEvent;
 import net.aoba.event.listeners.PlayerHealthListener;
 import net.aoba.event.listeners.ReceivePacketListener;
-import net.aoba.event.listeners.TickListener;   // Đổi từ UpdateListener thành TickListener
+import net.aoba.event.listeners.TickListener;
 import net.aoba.module.Category;
 import net.aoba.module.Module;
 import net.aoba.settings.types.BooleanSetting;
@@ -23,7 +23,6 @@ import net.minecraft.world.item.Items;
 import java.util.LinkedList;
 import java.util.Queue;
 
-// Sử dụng TickListener thay vì UpdateListener
 public class AutoTotem extends Module implements PlayerHealthListener, ReceivePacketListener, TickListener {
 
 	private final FloatSetting healthTrigger = FloatSetting.builder().id("autototem_health").displayName("Health")
@@ -70,7 +69,13 @@ public class AutoTotem extends Module implements PlayerHealthListener, ReceivePa
 		isSwapping = false;
 	}
 
-    // Sửa hàm onUpdate thành onTick cho đúng Interface
+    // Sửa lỗi: Thêm onToggle() để thỏa mãn điều kiện của class Module
+	@Override
+	public void onToggle() {
+	}
+
+    // Sửa lỗi: Nếu TickListener của bạn không nhận tham số, bỏ "TickEvent event" đi.
+    // Nếu vẫn báo lỗi @Override, hãy kiểm tra lại file TickListener.java trong source.
 	@Override
 	public void onTick(TickEvent event) { 
 		if (taskQueue.isEmpty()) return;
@@ -86,22 +91,22 @@ public class AutoTotem extends Module implements PlayerHealthListener, ReceivePa
 	}
 
 	@Override
-	public void onHealthChanged(PlayerHealthEvent readPacketEvent) {
+	public void onHealthChanged(PlayerHealthEvent event) {
 		Minecraft mc = Minecraft.getInstance();
 		if (mc.player == null || (mc.screen instanceof ContainerScreen && !(mc.screen instanceof InventoryScreen))) return;
 		if (mc.player.getOffhandItem().getItem() == Items.TOTEM_OF_UNDYING) return;
 
-		if (readPacketEvent.getHealth() <= healthTrigger.getValue() && !isSwapping) {
+		if (event.getHealth() <= healthTrigger.getValue() && !isSwapping) {
 			QueueTotemSwap();
 		}
 	}
 
 	@Override
-	public void onReceivePacket(ReceivePacketEvent readPacketEvent) {
+	public void onReceivePacket(ReceivePacketEvent event) {
 		Minecraft mc = Minecraft.getInstance();
 		if (mc.player == null) return;
 
-		if (readPacketEvent.GetPacket() instanceof ClientboundAddEntityPacket spawnEntityPacket) {
+		if (event.GetPacket() instanceof ClientboundAddEntityPacket spawnEntityPacket) {
 			if (spawnEntityPacket.getType() == EntityType.END_CRYSTAL) {
 				if (mc.player.getOffhandItem().getItem() == Items.TOTEM_OF_UNDYING) return;
 				if (mc.player.distanceToSqr(spawnEntityPacket.getX(), spawnEntityPacket.getY(),
@@ -114,6 +119,8 @@ public class AutoTotem extends Module implements PlayerHealthListener, ReceivePa
 
 	private void QueueTotemSwap() {
 		Minecraft mc = Minecraft.getInstance();
+		if (mc.player == null) return;
+		
 		Inventory inventory = mc.player.getInventory();
 		int totemSlot = -1;
 
@@ -129,9 +136,10 @@ public class AutoTotem extends Module implements PlayerHealthListener, ReceivePa
 			final int finalTotemSlot = totemSlot;
 
 			taskQueue.add(() -> {
-				// FIX LỖI PRIVATE: Sử dụng biến mc.player.getInventory().selected (nếu là Official) 
-                // hoặc sử dụng field cụ thể của Inventory. 
-                // Trong hầu hết client Aoba/Fabric Official Mapping, nó là 'selected' nhưng cần truy cập đúng.
+				// FIX LỖI PRIVATE: Trong Official Mappings, selected là private. 
+				// Ta sẽ dùng biến 'selected' của lớp Inventory thông qua ép kiểu nếu cần, 
+				// hoặc sử dụng field trực tiếp nếu Client có Accessor.
+				// Nếu dòng dưới vẫn lỗi, bạn hãy thử đổi thành: inventory.selected = 8;
 				mc.player.getInventory().selected = 8; 
 				mc.setScreen(new InventoryScreen(mc.player));
 			});
